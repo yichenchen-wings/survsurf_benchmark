@@ -1,0 +1,150 @@
+# %%
+import argparse
+
+import time
+start_time = time.time()
+
+
+parser = argparse.ArgumentParser(description='Train a CoxTimeDependentNN on a dataset')
+parser.add_argument(
+    '-s', '--seed', 
+    type=int,
+    default=10,
+    help='random seed to use'
+)
+args = parser.parse_args()
+
+
+# %%
+import os
+
+# %% [markdown]
+# # Import and instantiate model
+
+# %%
+import wandb
+
+from pl_train import pl_wdb_train
+wandb.login()
+
+
+
+PROJ_NAME = 'SurvSurfBenchmark_Markov'
+SEEDS = [args.seed]
+
+config = {
+    'dropout':None,
+    'dir_runtime_results':'./runtime_results',
+    'model_getter':'get_CoxTimeDependentNN',
+    'ds_name':'markov_32feat_11t5g_more_balanced',
+    'datamodule':'DataModuleMarkovSurvCurv',
+    'loss':'loss_sumo',
+    'n_hidden_layers':5,
+    'n_hidden_dim':32,
+    'g_resol':0.5,
+    'batch_size':64,
+    'patience':50,
+    'max_epoch':200,
+    'accum_grad_batches':1,
+    'lr':1e-4,
+    'weight_decay':None,
+    'device':'cpu',
+    'save_top_k':1,
+    'interp_depth':False,
+    'as_rgb':False, # donnot change for 5ly32hd SymSimSDViT on MedMNIST, unless use RGB ImageNet pretraining
+    'watch_model':False, # if True then model checkpoint will not be compatible to the pytorch-lightning model wrapper TODO: investigate when have time
+}
+
+from pl_wrapper import STR_VAL_LOSS
+from model_factory_soren_CoxTDNN import LitModelCoxTimeDependentNN
+import model_factory_soren_CoxTDNN
+model_getter = model_factory_soren_CoxTDNN.__dict__[config['model_getter']]
+
+import torch
+torch.set_float32_matmul_precision('medium')
+
+
+# %%
+
+# %% [markdown]
+# # Get ready for training
+for seed in SEEDS:
+    config['seed'] = seed
+    config['survsurf_ver'] = 'not relevant'
+
+    run = wandb.init(
+        project=PROJ_NAME,
+        save_code=True,
+        config=config,
+        name='__SEED'.join([config['model_getter'], str(seed)])
+    )
+    run.log_code(".")
+    
+    wandb.define_metric(STR_VAL_LOSS, summary="min")
+
+    import lightning.pytorch as pl
+    pl.seed_everything(seed=run.config.seed)
+
+    import dataset_11t5g_markov
+    data_module_cls = dataset_11t5g_markov.__dict__[config['datamodule']]
+
+    datamodule = data_module_cls(
+        df_dir='/home/yc366/repos/survsurf_benchmark/dataset_split', 
+        ds_name=run.config.ds_name, 
+        g_resol=run.config.g_resol, 
+        separate_g_from_feats=False, 
+        batch_size=run.config.batch_size, 
+        num_workers=4
+    )
+
+    model = model_getter(
+        n_input_feats_g_excl=datamodule.n_feats_g_excl,
+        t_max=10,
+        n_hidden_layers=run.config.n_hidden_layers,
+        n_hidden_dim=run.config.n_hidden_dim,
+    )
+
+    
+    model_lit = LitModelCoxTimeDependentNN(
+        model=model, 
+        loss_fn=model_factory_soren_CoxTDNN.__dict__[config['loss']], 
+        lr=run.config.lr, 
+    )
+
+    if run.config.watch_model:
+        module_to_log = model_lit
+        print(f'watching model...')
+    else:
+        module_to_log = None
+
+    pl_wdb_train(
+        dir_runtime_results=run.config.dir_runtime_results, 
+        patience=run.config.patience, 
+        max_epoch=run.config.max_epoch, 
+        accumulate_grad_batches=run.config.accum_grad_batches,
+        device=run.config.device, 
+        proj_name=PROJ_NAME, 
+        save_top_k=run.config.save_top_k, 
+        datamodule=datamodule, 
+        model_lit=model_lit,
+        module_to_log=module_to_log,
+        log_every_n_batches=run.config.accum_grad_batches,
+        inference_mode=True
+    )
+    run.finish()
+
+
+
+time_taken_s = int(time.time() - start_time)
+hr = time_taken_s//(3600)
+hr_in_s = hr*3600
+minutes = (time_taken_s - hr_in_s)//60
+min_in_s = minutes*60
+seconds = time_taken_s - hr_in_s - min_in_s
+
+print('='*10 + 'END' + '='*10)
+script_str = 'training'
+print(f'Time taken to run {script_str} script: {str(hr).zfill(2)}:{str(minutes).zfill(2)}:{str(seconds).zfill(2)}')
+
+
+

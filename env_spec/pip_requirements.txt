@@ -1,0 +1,7 @@
+# anything that cannot be installed by conda
+# need to be installed via pip.
+
+
+# Pleas list packages you need to install via pip
+monotonic_nn_surv_surf @ git+https://yc366@gitlab.developers.cam.ac.uk/yc366/monotonic_nn_survival_surface.git@e2c0261bb048f0619cffc34cee7718c1d5acc1c5
+wandb
