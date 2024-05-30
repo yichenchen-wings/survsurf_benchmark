@@ -33,4 +33,4 @@ dependencies:
 - conda-forge::optuna
 
 # for reading CT images
-- sebp::scikit-survival
+- sebp::scikit-survival=0.22.2

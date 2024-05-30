@@ -1,7 +1,7 @@
 runtime_results/
 wandb/
 artifacts/
-
+sksurv_models/
 
 
 # Byte-compiled / optimized / DLL files
