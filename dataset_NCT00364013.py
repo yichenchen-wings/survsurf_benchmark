@@ -1,0 +1,338 @@
+
+from lightning import LightningDataModule
+import torch
+from torch.utils.data import Dataset, DataLoader
+from typing import Literal
+from scipy.stats import truncnorm
+import pandas as pd
+import numpy as np
+import os
+
+ds_name_to_n_feats_mapping = {
+    'real_NCT00364013':25,
+}
+
+COLNAME_SURVIVAL_DURATION = "duration"
+COLNAME_SURVIVAL_EVENT_OBSERVED ="event_observed"
+
+class DatasetNCT00364013SurvCurv(Dataset):
+    def __init__(
+            self, 
+            df_dir, 
+            ds_name, 
+            g_resol, 
+            split: Literal['train', 'tune', 'val', 'test'], 
+            mode:Literal['obs_only', 'multi_t', 'true_probs_grid', 'true_probs_around_t'],
+            separate_g_from_feats: bool,
+            t_resol=30
+        ):
+        self.split = split
+        self.path_df_feature_per_sub = os.path.join(df_dir,f'{ds_name}__df_features_{split}.csv')
+        self.path_event_g_at_t_obs = os.path.join(df_dir,f'{ds_name}__df_event_time_{split}.csv')
+        self.g_resol = g_resol
+        self.t_resol = t_resol
+        self.separate_g_from_feats = separate_g_from_feats
+        self.colname_traj_id = 'subject'
+        self.colname_time = 't'
+        self.colname_trans_to = 'g'
+        self.mode = mode
+
+        self.subjects, self.X, self.g, self.t, self.y = self._get_df_Xy()
+
+    def __len__(self):
+        return self.y.shape[0]
+
+    def __getitem__(self, index):
+        if self.separate_g_from_feats:
+            return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index]
+        else:
+            return self.subjects[index], self.X[index], self.t[index], self.y[index]
+        
+    def _single_event_to_5_times(self, single_event):
+
+        out_df = pd.DataFrame()
+        assert single_event.shape[0] == 1
+        single_event = single_event.iloc[0, :]
+        
+        out_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = np.nan
+        if single_event['event_observed']:
+            left = single_event[self.colname_time]/self.t_resol
+            t = truncnorm.rvs(a=-left, b=3, loc=0.0, scale=self.t_resol, size=5)
+            t = np.array(list(set(t).union([0])))
+            out_df[COLNAME_SURVIVAL_DURATION] = single_event[self.colname_time] + t
+            selector = out_df[COLNAME_SURVIVAL_DURATION] < 0
+            out_df.loc[selector, COLNAME_SURVIVAL_DURATION] = 0
+            out_df.loc[
+                out_df[COLNAME_SURVIVAL_DURATION] < single_event[self.colname_time], 
+                COLNAME_SURVIVAL_EVENT_OBSERVED
+            ] = 0
+            out_df.loc[
+                out_df[COLNAME_SURVIVAL_DURATION] >= single_event[self.colname_time], 
+                COLNAME_SURVIVAL_EVENT_OBSERVED
+            ] = 1
+        else:
+            if single_event[self.colname_time]:
+                t = truncnorm.rvs(a=0, b=single_event[self.colname_time]/self.t_resol, loc=0.0, scale=self.t_resol, size=2)
+                t = np.array(list(set(t).union([0])))
+            else:
+                t = 0
+            out_df[COLNAME_SURVIVAL_DURATION] = single_event[self.colname_time] - t
+            selector = out_df[COLNAME_SURVIVAL_DURATION] < 0
+            out_df.loc[selector, COLNAME_SURVIVAL_DURATION] = 0
+            out_df.loc[
+                out_df[COLNAME_SURVIVAL_DURATION] <= single_event[self.colname_time], 
+                COLNAME_SURVIVAL_EVENT_OBSERVED
+            ] = 0
+        
+        assert out_df[COLNAME_SURVIVAL_EVENT_OBSERVED].notna().all()
+        return out_df
+        
+
+    def _get_df_Xy_multi_t(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        event_g_at_t_obs = pd.read_csv(self.path_event_g_at_t_obs, index_col=0)
+        df_trans_time = event_g_at_t_obs.groupby(
+            [self.colname_traj_id,'g'],
+            group_keys=True
+        ).apply(
+            lambda df: self._single_event_to_5_times(df)
+        ).reset_index(level=[0,1]).rename(
+            columns={
+                'g':self.colname_trans_to
+            }
+        )
+        df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.reset_index(drop=True)
+        return df_xy 
+
+
+    def _get_df_Xy_obs(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        event_g_at_t_obs = pd.read_csv(self.path_event_g_at_t_obs, index_col=0)
+        assert self.colname_traj_id in event_g_at_t_obs.columns
+        
+        df_trans_time = event_g_at_t_obs.rename(
+            columns={
+                self.colname_time:COLNAME_SURVIVAL_DURATION,
+                'g':self.colname_trans_to, 
+                'event_observed':COLNAME_SURVIVAL_EVENT_OBSERVED
+            }
+        )
+        df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.reset_index(drop=True)
+        return df_xy
+     
+    def _get_df_Xy_around_t(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        event_g_at_t_obs = pd.read_csv(self.path_event_g_at_t_obs, index_col=0)
+        assert self.colname_traj_id in event_g_at_t_obs.columns
+        event_g_at_t_obs_before = event_g_at_t_obs.copy()
+        event_g_at_t_obs_before[self.colname_time] = event_g_at_t_obs_before[self.colname_time] - self.t_resol
+        selector = event_g_at_t_obs_before[self.colname_time] < 0
+        event_g_at_t_obs_before.loc[selector, self.colname_time] = 0
+        event_g_at_t_obs_before['event_observed'] = 0
+        
+        df_trans_time = pd.concat([event_g_at_t_obs, event_g_at_t_obs_before]).rename(
+            columns={
+                self.colname_time:COLNAME_SURVIVAL_DURATION,
+                'g':self.colname_trans_to, 
+                'event_observed':COLNAME_SURVIVAL_EVENT_OBSERVED
+            }
+        )
+        df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.reset_index(drop=True)
+        return df_xy  
+
+    def _single_event_to_trans_times(self, single_event, t_min, t_max):
+        t = [i for i in range(int(t_min), int(t_max)+1, self.t_resol)] + [t_max]
+        t = sorted(set(t))
+
+        out_df = pd.DataFrame()
+        assert single_event.shape[0] == 1
+        single_event = single_event.iloc[0, :]
+        out_df[COLNAME_SURVIVAL_DURATION] = t
+        out_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = np.nan
+        if single_event['event_observed']:
+            out_df.loc[
+                out_df[COLNAME_SURVIVAL_DURATION] < single_event[self.colname_time], 
+                COLNAME_SURVIVAL_EVENT_OBSERVED
+            ] = 0
+            out_df.loc[
+                out_df[COLNAME_SURVIVAL_DURATION] >= single_event[self.colname_time], 
+                COLNAME_SURVIVAL_EVENT_OBSERVED
+            ] = 1
+        else:
+            out_df.loc[
+                out_df[COLNAME_SURVIVAL_DURATION] <= single_event[self.colname_time], 
+                COLNAME_SURVIVAL_EVENT_OBSERVED
+            ] = 0
+        return out_df
+    
+    def _get_df_Xy_true_prob(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        event_g_at_t_obs = pd.read_csv(self.path_event_g_at_t_obs, index_col=0)
+        t_min = event_g_at_t_obs.loc[~event_g_at_t_obs['event_observed'].astype(bool),self.colname_time].min()
+        t_max = event_g_at_t_obs.loc[event_g_at_t_obs['event_observed'].astype(bool),self.colname_time].max()
+        df_trans_time = event_g_at_t_obs.groupby(
+            [self.colname_traj_id,'g'],
+            group_keys=True
+        ).apply(
+            lambda df: self._single_event_to_trans_times(df, t_min, t_max)
+        ).reset_index(level=[0,1]).rename(
+            columns={
+                'g':self.colname_trans_to
+            }
+        )
+        df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.reset_index(drop=True)
+        return df_xy
+
+    def _get_df_Xy(self):
+        if self.mode == 'obs_only':
+            df_Xy = self._get_df_Xy_obs()
+        elif self.mode == 'true_probs_grid':
+            df_Xy = self._get_df_Xy_true_prob()
+        elif self.mode == 'true_probs_around_t':
+            df_Xy = self._get_df_Xy_around_t()
+        elif self.mode == 'multi_t':
+            df_Xy = self._get_df_Xy_multi_t()
+        else:
+            raise NotImplementedError
+        df_Xy[self.colname_trans_to] = df_Xy[self.colname_trans_to]/2
+        cols_subj_feats = sorted([i for i in df_Xy.columns if i.startswith('feat')])
+        if self.separate_g_from_feats:
+            subjects = df_Xy[self.colname_traj_id]
+            X = torch.tensor(df_Xy[cols_subj_feats].values.astype(np.float64), dtype=torch.float32)
+            g = torch.tensor(df_Xy[[self.colname_trans_to]].values.astype(np.float64), dtype=torch.float32)
+            t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values.astype(np.float64), dtype=torch.float32)
+            y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values.astype(np.float64), dtype=torch.float32)
+            return subjects, X,g,t,y
+        
+        else:
+            subjects = df_Xy[self.colname_traj_id]
+            cols_subj_feats = cols_subj_feats + [self.colname_trans_to]
+            X = torch.tensor(df_Xy[cols_subj_feats].values.astype(np.float64), dtype=torch.float32)
+            g = None
+            t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values.astype(np.float64), dtype=torch.float32)
+            y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values.astype(np.float64), dtype=torch.float32)
+            return subjects,X,g,t,y
+
+class DataModuleNCT00364013SurvCurv(LightningDataModule):
+    def __init__(
+            self, 
+            df_dir, 
+            ds_name, 
+            g_resol, 
+            separate_g_from_feats, 
+            batch_size, 
+            num_workers, 
+            train_mode:Literal['obs_only', 'multi_t', 'true_probs_grid', 'true_probs_around_t'],
+            eval_mode:Literal['obs_only', 'multi_t', 'true_probs_grid', 'true_probs_around_t'], 
+            t_resol=30
+        ):
+        super().__init__()
+        self.df_dir = df_dir
+        self.ds_name = ds_name
+        self.g_resol = g_resol
+        self.separate_g_from_feats = separate_g_from_feats
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.n_feats_g_excl = ds_name_to_n_feats_mapping[ds_name]
+        self.train_mode = train_mode
+        self.eval_mode = eval_mode
+        self.t_resol = t_resol
+    def train_dataloader(self):
+        train_split = DatasetNCT00364013SurvCurv(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='train', 
+            mode=self.train_mode,
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol
+        )
+        return DataLoader(train_split, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+    def train_for_eval_dataloader(self):
+        as_obs = DatasetNCT00364013SurvCurv(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='train', 
+            mode=self.train_mode,
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol
+        )
+        as_true_prob = DatasetNCT00364013SurvCurv(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='train', 
+            mode=self.eval_mode, 
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol
+        )
+        return [
+            DataLoader(as_obs, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
+            DataLoader(as_true_prob, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
+        ]
+    def val_dataloader(self):
+        as_obs = DatasetNCT00364013SurvCurv(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='val', 
+            mode=self.train_mode, 
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol
+        )
+        as_true_prob = DatasetNCT00364013SurvCurv(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='val', 
+            mode=self.eval_mode, 
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol
+        )
+        return [
+            DataLoader(as_obs, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
+            DataLoader(as_true_prob, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
+        ]
+    def test_dataloader(self):
+        as_obs = DatasetNCT00364013SurvCurv(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='test', 
+            mode=self.train_mode, 
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol
+        )
+        as_true_prob = DatasetNCT00364013SurvCurv(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='test', 
+            mode=self.eval_mode, 
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol
+        )
+       
+        return [
+            DataLoader(as_obs, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
+            DataLoader(as_true_prob, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
+        ]
+
+        

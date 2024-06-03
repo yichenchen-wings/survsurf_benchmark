@@ -2,6 +2,7 @@ import torch
 from soren_survcurv import CoxTimeDependentNN
 from soren_survcurv.losses import SuMoLoss
 from soren_survcurv.nets.monotone_module import MonotonicIncreasingNet, MonotonicIncreasingVectorNet
+import numpy as np
 
 
 def get_CoxTimeDependentNN(
@@ -42,6 +43,59 @@ def loss_sumo(model, batch):
     losses = loss_fn(outputs, 1-ys, ts)
     return losses
 
+def loss_bce(model, batch):
+    subjects, Xs, ts, ys = batch
+    outputs = model(batch)
+    loss_fn = torch.nn.functional.binary_cross_entropy
+    ys = ys.type(outputs.dtype)
+
+    losses = loss_fn(1-outputs, ys, ts)
+    return losses
+
+def loss_dydt(model, batch): # same as sumo
+    subjects, Xs, ts, ys = batch
+    ts.requires_grad_()
+    outputs = model(batch)
+
+    dydt = torch.autograd.grad(
+        outputs=outputs,
+        inputs=ts,
+        grad_outputs=torch.ones_like(outputs),
+        create_graph=True,
+        retain_graph=True
+    )[0]
+    dydt = torch.clamp(dydt, -np.inf, -1e-6)
+    outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+    losses = (
+        ys*torch.log(-dydt) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+        + (1-ys)*torch.log(outputs) 
+    )
+    losses = -torch.mean(losses)
+    return losses
+
+
+def loss_dydg(model, batch):
+    small_change = 1e-6
+
+    subjects, Xs, ts, ys = batch
+    outputs = 1-model(batch)
+
+    Xs_g_greater = Xs.clone()
+    Xs_g_greater[:,-1] = Xs_g_greater[:,-1] + small_change
+    batch_g_greater = (subjects, Xs_g_greater, ts, ys)
+    
+    outputs_g_greater = 1-model(batch_g_greater)
+
+    dydg = (outputs_g_greater - outputs)/small_change
+    dydg = torch.clamp(dydg, -np.inf, -small_change)
+    outputs = torch.clamp(outputs, small_change, 1-small_change)
+    losses = (
+        ys*torch.log(outputs)
+        + ys*torch.log(-dydg) # if observed g (g > 0) at t, then dy/dg (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+        + (1-ys)*torch.log(1-outputs) # if g = 0 at t, prob at g=0 cannot be computed, but (t, g_min/2, x), g_min > 0, should have prob closer to 0.
+    )
+    losses = -torch.mean(losses)
+    return losses
 
 
 from pl_wrapper import STR_VAL_LOSS, LitModel

@@ -29,29 +29,31 @@ wandb.login()
 
 
 
-PROJ_NAME = 'SurvSurfBenchmark_Markov'
+PROJ_NAME = 'SurvSurfBenchmark_NCT00364013'
 SEEDS = [args.seed]
 
 config = {
     'dropout':None,
     'dir_runtime_results':'./runtime_results',
     'model_getter':'get_SurvSurf',
-    'ds_name':'markov_32feat_11t5g_more_balanced',
-    'datamodule':'DataModuleMarkovSurvCurv',
-    'loss':'loss_sumo',
-    'n_hidden_layers':5,
+    'ds_name':'real_NCT00364013',
+    'datamodule':'DataModuleNCT00364013SurvCurv',
+    'train_mode':'multi_t',
+    'eval_mode':'multi_t',
+    'loss':'LossBrierSimple',
+    'n_hidden_layers':16,
     'n_hidden_dim':32,
     'g_resol':0.5,
-    'batch_size':64,
+    'batch_size':16*5,
     'patience':50,
-    'max_epoch':200,
+    'max_epoch':300,
     'accum_grad_batches':1,
     'lr':5e-4,
-    'weight_decay':1e-3,
+    'weight_decay':5e-2,
     'device':'cpu',
     'save_top_k':1,
-    'interp_depth':False,
-    'as_rgb':False, # donnot change for 5ly32hd SymSimSDViT on MedMNIST, unless use RGB ImageNet pretraining
+    't_res_in_loss':30, 
+    't_res_at_trans':180,
     'watch_model':False, # if True then model checkpoint will not be compatible to the pytorch-lightning model wrapper TODO: investigate when have time
 }
 
@@ -86,8 +88,8 @@ for seed in SEEDS:
     import lightning.pytorch as pl
     pl.seed_everything(seed=run.config.seed)
     
-    import dataset_11t5g_markov
-    data_module_cls = dataset_11t5g_markov.__dict__[config['datamodule']]
+    import datasets
+    data_module_cls = datasets.__dict__[config['datamodule']]
 
     datamodule = data_module_cls(
         df_dir='/home/yc366/repos/survsurf_benchmark/dataset_split', 
@@ -95,21 +97,26 @@ for seed in SEEDS:
         g_resol=run.config.g_resol, 
         separate_g_from_feats=True, 
         batch_size=run.config.batch_size, 
-        num_workers=4
+        num_workers=4,
+        t_resol=run.config.t_res_at_trans,
+        train_mode=run.config.train_mode,
+        eval_mode=run.config.eval_mode
     )
 
 
     model = model_getter(
         n_input_feats_g_excl=datamodule.n_feats_g_excl,
-        t_max=10,
+        t_max=900,
         n_hidden_layers=run.config.n_hidden_layers,
         n_hidden_dim=run.config.n_hidden_dim,
     )
 
+    loss_fn_cls = model_factory_survsurf.__dict__[config['loss']]
+    loss_fn = loss_fn_cls(t_res=run.config.t_res_in_loss)
 
     model_lit = LitModelSurvSurf(
         model=model, 
-        loss_fn=model_factory_survsurf.__dict__[config['loss']], 
+        loss_fn=loss_fn, 
         lr=run.config.lr,
         weight_decay=run.config.weight_decay
     )

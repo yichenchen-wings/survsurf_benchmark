@@ -29,18 +29,18 @@ wandb.login()
 
 
 
-PROJ_NAME = 'SurvSurfBenchmark_Markov'
+PROJ_NAME = 'SurvSurfBenchmark_NCT00364013'
 SEEDS = [args.seed]
 
 config = {
     'dropout':None,
     'dir_runtime_results':'./runtime_results',
     'model_getter':'get_CoxTimeDependentNN',
-    'ds_name':'markov_32feat_11t5g_more_balanced',
-    'datamodule':'DataModuleMarkovSurvCurv',
-    'loss':'loss_sumo',
+    'ds_name':'real_NCT00364013',
+    'datamodule':'DataModuleNCT00364013SurvCurv',
+    'loss':'loss_dydt',
     'n_hidden_layers':5,
-    'n_hidden_dim':32,
+    'n_hidden_dim':16,
     'g_resol':0.5,
     'batch_size':64,
     'patience':50,
@@ -50,8 +50,6 @@ config = {
     'weight_decay':None,
     'device':'cpu',
     'save_top_k':1,
-    'interp_depth':False,
-    'as_rgb':False, # donnot change for 5ly32hd SymSimSDViT on MedMNIST, unless use RGB ImageNet pretraining
     'watch_model':False, # if True then model checkpoint will not be compatible to the pytorch-lightning model wrapper TODO: investigate when have time
 }
 
@@ -85,8 +83,8 @@ for seed in SEEDS:
     import lightning.pytorch as pl
     pl.seed_everything(seed=run.config.seed)
 
-    import dataset_11t5g_markov
-    data_module_cls = dataset_11t5g_markov.__dict__[config['datamodule']]
+    import datasets
+    data_module_cls = datasets.__dict__[config['datamodule']]
 
     datamodule = data_module_cls(
         df_dir='/home/yc366/repos/survsurf_benchmark/dataset_split', 
@@ -99,7 +97,7 @@ for seed in SEEDS:
 
     model = model_getter(
         n_input_feats_g_excl=datamodule.n_feats_g_excl,
-        t_max=10,
+        t_max=900,
         n_hidden_layers=run.config.n_hidden_layers,
         n_hidden_dim=run.config.n_hidden_dim,
     )

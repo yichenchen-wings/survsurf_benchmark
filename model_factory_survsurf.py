@@ -2,6 +2,7 @@ import torch
 from monotonic_nn_surv_surf.core.survival_surface_nn import SurvivalSurface
 from monotonic_nn_surv_surf.core.monotonic_net import MonotonicNet
 from soren_survcurv.losses import SuMoLoss
+import numpy as np
 
 class SurvSurfNormTG(SurvivalSurface):
     def __init__(self, net, t_max):
@@ -24,15 +25,20 @@ def get_SurvSurf(
     return model
 
 
+class LossBrierSimple:
+    def __init__(self, t_res=None):
+        pass
+    def loss_brier(self, model, batch):
+        subjects, Xs, gs, ts, ys = batch
+        outputs = model(batch)
+        loss_fn = torch.nn.functional.mse_loss
+        ys = ys.type(outputs.dtype)
 
-def loss_brier(model, batch):
-    subjects, Xs, gs, ts, ys = batch
-    outputs = model(batch)
-    loss_fn = torch.nn.functional.mse_loss
-    ys = ys.type(outputs.dtype)
-
-    losses = loss_fn(outputs, ys)
-    return losses
+        losses = loss_fn(outputs, ys)
+        return losses
+    
+    def __call__(self, model, batch):
+        return self.loss_brier(model, batch)
 
 def loss_sumo(model, batch):
     subjects, Xs, gs, ts, ys = batch
@@ -42,6 +48,143 @@ def loss_sumo(model, batch):
     ys = ys.type(outputs.dtype)
 
     losses = loss_fn(1-outputs, 1-ys, ts)
+    return losses
+
+class LOSSBCETRes:
+    def __init__(self, t_res):
+        self.t_res = t_res
+    def loss_bce(self, model, batch): 
+        subjects, Xs, gs, ts, ys = batch
+        outputs = model(batch)
+        t_before =  ts - self.t_res
+        t_before =  torch.clamp(t_before, 0, torch.inf)
+        batch_t_before = (subjects, Xs, gs, t_before, ys )
+        outputs_t_before = model(batch_t_before)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = (
+            (  ys*torch.log(outputs) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+                + ys*torch.log(1-outputs_t_before)
+            )/2
+            + (1-ys)*torch.log(1-outputs) 
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def __call__(self, model, batch):
+        if self.t_res:
+            return self.loss_bce(model, batch)
+        else:
+            raise NotImplementedError
+        
+
+class LOSSBrierTRes:
+    def __init__(self, t_res):
+        self.t_res = t_res
+    def loss_brier(self, model, batch): 
+        subjects, Xs, gs, ts, ys = batch
+        outputs = model(batch)
+        t_before =  ts - self.t_res
+        t_before =  torch.clamp(t_before, 0, torch.inf)
+        batch_t_before = (subjects, Xs, gs, t_before, ys )
+        outputs_t_before = model(batch_t_before)
+        losses = (
+            (
+                ys*torch.square(outputs-1)
+                + ys*torch.square(outputs_t_before - 0)
+            )/2
+             + (1-ys)*torch.square(outputs)
+        )
+        losses = torch.mean(losses)
+        return losses
+    
+    def __call__(self, model, batch):
+        if self.t_res:
+            return self.loss_brier(model, batch)
+        else:
+            raise NotImplementedError
+
+    
+
+class LOSSDyDt:
+    def __init__(self, t_res):
+        self.t_res = t_res
+    def loss_dydt(self, model, batch): 
+        subjects, Xs, gs, ts, ys = batch
+        ts.requires_grad_()
+        outputs = model(batch)
+
+        dydt = torch.autograd.grad(
+            outputs=outputs,
+            inputs=ts,
+            grad_outputs=torch.ones_like(outputs),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+        dydt = torch.clamp(dydt, 1e-6, np.inf)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = (
+            ys*torch.log(dydt) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+            + (1-ys)*torch.log(1-outputs) 
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def loss_dy_t_res(self, model, batch):
+        subjects, Xs, gs, ts, ys = batch
+        outputs = model(batch)
+        
+        t_before =  ts - self.t_res
+        t_before =  torch.clamp(t_before, 0, torch.inf)
+
+        batch_t_before = (subjects, Xs, gs, t_before, ys )
+        outputs_t_before = model(batch_t_before)
+
+        dy = outputs - outputs_t_before
+
+        dy = torch.clamp(dy, 1e-6, 1-1e-6)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = (
+            ys*torch.log(dy) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+            + (1-ys)*torch.log(1-outputs) 
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def __call__(self, model, batch):
+        if self.t_res:
+            return self.loss_dy_t_res(model, batch)
+        else:
+            return self.loss_dydt(model, batch)
+
+def loss_bce(model, batch):
+    subjects, Xs, gs, ts, ys = batch
+    outputs = model(batch)
+    loss_fn = torch.nn.functional.binary_cross_entropy
+    ys = ys.type(outputs.dtype)
+
+    losses = loss_fn(outputs, ys, ts)
+    return losses
+
+def loss_dydg(model, batch):
+    subjects, Xs, gs, ts, ys = batch
+    gs.requires_grad_()
+    outputs = model(batch)
+
+    dydg = torch.autograd.grad(
+        outputs=outputs,
+        inputs=gs,
+        grad_outputs=torch.ones_like(outputs),
+        create_graph=True,
+        retain_graph=True
+    )[0]
+    dydg = torch.clamp(dydg, -np.inf, -1e-6)
+    outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+    losses = (
+        ys*torch.log(outputs)
+        + ys*torch.log(-dydg) # if observed g (g > 0) at t, then dy/dg (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+        + (1-ys)*torch.log(1-outputs) # if g = 0 at t, prob at g=0 cannot be computed, but (t, g_min/2, x), g_min > 0, should have prob closer to 0.
+    )
+    losses = -torch.mean(losses)
     return losses
 
 
@@ -59,6 +202,7 @@ class LitModelSurvSurf(LitModel):
         self.validation_loss = []
         self.validation_brier_on_probs = []
         self.weight_decay = weight_decay
+        self.eval_fn = LossBrierSimple()
     def forward(self,batch):
         subjects, Xs, gs, ts, ys = batch
         return self.model(ts, gs, Xs)
@@ -83,7 +227,7 @@ class LitModelSurvSurf(LitModel):
                 self.validation_loss.append(eval_res)
             if dataloader_idx == 1:
                 # Compute the loss
-                loss = loss_brier(self, batch)
+                loss = self.eval_fn(self, batch)
                 eval_res = dict()
                 eval_res['brier_on_probs'] = loss.detach()
                 self.validation_brier_on_probs.append(eval_res)
