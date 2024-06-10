@@ -29,19 +29,18 @@ class LossBrierSimple:
     def __init__(self, t_res=None):
         pass
     def loss_brier(self, model, batch):
-        subjects, Xs, gs, ts, ys = batch
+        subjects, Xs, gs, ts, ys, weight = batch
         outputs = model(batch)
-        loss_fn = torch.nn.functional.mse_loss
         ys = ys.type(outputs.dtype)
 
-        losses = loss_fn(outputs, ys)
-        return losses
+        losses = torch.square(outputs - ys)*weight
+        return torch.mean(losses)
     
     def __call__(self, model, batch):
         return self.loss_brier(model, batch)
 
 def loss_sumo(model, batch):
-    subjects, Xs, gs, ts, ys = batch
+    subjects, Xs, gs, ts, ys, weight = batch
     ts.requires_grad_()
     outputs = model(batch)
     loss_fn = SuMoLoss()
@@ -54,14 +53,14 @@ class LOSSBCETRes:
     def __init__(self, t_res):
         self.t_res = t_res
     def loss_bce(self, model, batch): 
-        subjects, Xs, gs, ts, ys = batch
+        subjects, Xs, gs, ts, ys, weight = batch
         outputs = model(batch)
         t_before =  ts - self.t_res
         t_before =  torch.clamp(t_before, 0, torch.inf)
         batch_t_before = (subjects, Xs, gs, t_before, ys )
         outputs_t_before = model(batch_t_before)
         outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
-        losses = (
+        losses = weight*(
             (  ys*torch.log(outputs) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
                 + ys*torch.log(1-outputs_t_before)
             )/2
@@ -81,13 +80,13 @@ class LOSSBrierTRes:
     def __init__(self, t_res):
         self.t_res = t_res
     def loss_brier(self, model, batch): 
-        subjects, Xs, gs, ts, ys = batch
+        subjects, Xs, gs, ts, ys, weight = batch
         outputs = model(batch)
         t_before =  ts - self.t_res
         t_before =  torch.clamp(t_before, 0, torch.inf)
         batch_t_before = (subjects, Xs, gs, t_before, ys )
         outputs_t_before = model(batch_t_before)
-        losses = (
+        losses = weight*(
             (
                 ys*torch.square(outputs-1)
                 + ys*torch.square(outputs_t_before - 0)
@@ -109,7 +108,7 @@ class LOSSDyDt:
     def __init__(self, t_res):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
-        subjects, Xs, gs, ts, ys = batch
+        subjects, Xs, gs, ts, ys, weight = batch
         ts.requires_grad_()
         outputs = model(batch)
 
@@ -122,7 +121,7 @@ class LOSSDyDt:
         )[0]
         dydt = torch.clamp(dydt, 1e-6, np.inf)
         outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
-        losses = (
+        losses = 1*(
             ys*torch.log(dydt) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
             + (1-ys)*torch.log(1-outputs) 
         )
@@ -130,20 +129,20 @@ class LOSSDyDt:
         return losses
     
     def loss_dy_t_res(self, model, batch):
-        subjects, Xs, gs, ts, ys = batch
+        subjects, Xs, gs, ts, ys, weight = batch
         outputs = model(batch)
         
         t_before =  ts - self.t_res
         t_before =  torch.clamp(t_before, 0, torch.inf)
 
-        batch_t_before = (subjects, Xs, gs, t_before, ys )
+        batch_t_before = (subjects, Xs, gs, t_before, ys, weight )
         outputs_t_before = model(batch_t_before)
 
         dy = outputs - outputs_t_before
 
         dy = torch.clamp(dy, 1e-6, 1-1e-6)
         outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
-        losses = (
+        losses = 1*(
             ys*torch.log(dy) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
             + (1-ys)*torch.log(1-outputs) 
         )
@@ -157,7 +156,7 @@ class LOSSDyDt:
             return self.loss_dydt(model, batch)
 
 def loss_bce(model, batch):
-    subjects, Xs, gs, ts, ys = batch
+    subjects, Xs, gs, ts, ys, weight = batch
     outputs = model(batch)
     loss_fn = torch.nn.functional.binary_cross_entropy
     ys = ys.type(outputs.dtype)
@@ -165,8 +164,87 @@ def loss_bce(model, batch):
     losses = loss_fn(outputs, ys, ts)
     return losses
 
+class LossDySimple:
+    def __init__(self, t_res=None, g_res=1/5):
+        self.g_res=g_res
+        pass
+    
+    def loss_dg(self, model, batch):
+        subjects, Xs, gs, ts, ys, weight = batch
+        gs.requires_grad_()
+        outputs = model(batch)
+        greater_g = gs + self.g_res
+        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight )
+        outputs_greater_g  = model(batch_greater_g)
+        dy = outputs_greater_g - outputs
+        dy = torch.clamp(dy, -(1-1e-6), -1e-6)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = (
+            ys*torch.log(-dy) # if observed g (g > 0) at t, then dy/dg (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+            + (1-ys)*torch.log(1-outputs) # if g = 0 at t, prob at g=0 cannot be computed, but (t, g_min/2, x), g_min > 0, should have prob closer to 0.
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def __call__(self, model, batch):
+        return self.loss_dg(model, batch)
+
+
+class LossDyDgEmphPos:
+    def __init__(self, t_res=None, g_res=1/5):
+        self.g_res=g_res
+    
+    def loss_dydg(self, model, batch):
+        subjects, Xs, gs, ts, ys, weight = batch
+        gs.requires_grad_()
+        outputs = model(batch)
+        greater_g = gs + self.g_res
+        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight )
+        outputs_greater_g  = model(batch_greater_g)
+        dy = outputs_greater_g - outputs
+        dy = torch.clamp(dy, -(1-1e-6), -1e-6)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = (
+            ys*torch.log(outputs)
+            + ys*torch.log(-dy) # if observed g (g > 0) at t, then dy/dg (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+            + (1-ys)*torch.log(1-outputs) # if g = 0 at t, prob at g=0 cannot be computed, but (t, g_min/2, x), g_min > 0, should have prob closer to 0.
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def __call__(self, model, batch):
+        return self.loss_dydg(model, batch)
+    
+class LossDyDgSimple:
+    def __init__(self, t_res=None):
+        pass
+    
+    def loss_dydg(self, model, batch):
+        subjects, Xs, gs, ts, ys, weight = batch
+        gs.requires_grad_()
+        outputs = model(batch)
+
+        dydg = torch.autograd.grad(
+            outputs=outputs,
+            inputs=gs,
+            grad_outputs=torch.ones_like(outputs),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+        dydg = torch.clamp(dydg, -np.inf, -1e-6)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = (
+            ys*torch.log(-dydg) # if observed g (g > 0) at t, then dy/dg (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+            + (1-ys)*torch.log(1-outputs) # if g = 0 at t, prob at g=0 cannot be computed, but (t, g_min/2, x), g_min > 0, should have prob closer to 0.
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def __call__(self, model, batch):
+        return self.loss_dydg(model, batch)
+
 def loss_dydg(model, batch):
-    subjects, Xs, gs, ts, ys = batch
+    subjects, Xs, gs, ts, ys, weight = batch
     gs.requires_grad_()
     outputs = model(batch)
 
@@ -180,13 +258,11 @@ def loss_dydg(model, batch):
     dydg = torch.clamp(dydg, -np.inf, -1e-6)
     outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
     losses = (
-        ys*torch.log(outputs)
-        + ys*torch.log(-dydg) # if observed g (g > 0) at t, then dy/dg (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+        ys*torch.log(-dydg) # if observed g (g > 0) at t, then dy/dg (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
         + (1-ys)*torch.log(1-outputs) # if g = 0 at t, prob at g=0 cannot be computed, but (t, g_min/2, x), g_min > 0, should have prob closer to 0.
     )
     losses = -torch.mean(losses)
     return losses
-
 
 
 from pl_wrapper import STR_VAL_LOSS, LitModel
@@ -204,7 +280,7 @@ class LitModelSurvSurf(LitModel):
         self.weight_decay = weight_decay
         self.eval_fn = LossBrierSimple()
     def forward(self,batch):
-        subjects, Xs, gs, ts, ys = batch
+        subjects, Xs, gs, ts, ys, weight = batch
         return self.model(ts, gs, Xs)
     
     def configure_optimizers(self):

@@ -6,5 +6,5 @@ ds_name_to_n_feats_mapping = {
     'real_NCT00364013':25,
 }
 
-from dataset_11t5g_markov import DataModuleMarkovSurvCurv, DataModuleMarkovSurvSurf
+from dataset_11t5g_markov import DatasetMarkovSurvSurf, DataModuleMarkovSurvSurf
 from dataset_NCT00364013 import DataModuleNCT00364013SurvCurv

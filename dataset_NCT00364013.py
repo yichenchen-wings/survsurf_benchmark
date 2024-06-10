@@ -3,10 +3,13 @@ from lightning import LightningDataModule
 import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Literal
-from scipy.stats import truncnorm
+from scipy.stats import uniform
+from sksurv.nonparametric import kaplan_meier_estimator
 import pandas as pd
 import numpy as np
 import os
+
+from IPCW import IPCW
 
 ds_name_to_n_feats_mapping = {
     'real_NCT00364013':25,
@@ -14,6 +17,32 @@ ds_name_to_n_feats_mapping = {
 
 COLNAME_SURVIVAL_DURATION = "duration"
 COLNAME_SURVIVAL_EVENT_OBSERVED ="event_observed"
+COLNAME_WEIGHT = 'weight'
+
+def get_train_ipcw(df_dir, ds_name):
+    path_event_g_at_t_obs = os.path.join(df_dir,f'{ds_name}__df_event_time_train.csv')
+    df_event_g_at_t_obs = pd.read_csv(path_event_g_at_t_obs, index_col=0)
+    g_to_censor_curv = dict()
+    for g, df_event_t in df_event_g_at_t_obs.groupby('g'):
+        df_event_t = df_event_t.sort_values('t')
+        time, S_censor = kaplan_meier_estimator(df_event_t['event_observed'].astype(bool), df_event_t['t'], reverse=True)
+        if 0 not in time:
+            time = np.r_[[0.], time]
+            S_censor = np.r_[[1.], S_censor]
+        g_to_censor_curv[g] = IPCW(time, S_censor)
+    return g_to_censor_curv
+
+
+def get_t_max_train(df_dir, ds_name):
+    path_event_g_at_t_obs = os.path.join(df_dir,f'{ds_name}__df_event_time_train.csv')
+    df_event_g_at_t_obs = pd.read_csv(path_event_g_at_t_obs, index_col=0)
+    g_to_t_max = dict()
+    for g, df_event_t in df_event_g_at_t_obs.groupby('g'):
+        df_event_t = df_event_t.sort_values('t')
+        g_to_t_max[g] = df_event_t['t'].max()
+    return g_to_t_max
+
+
 
 class DatasetNCT00364013SurvCurv(Dataset):
     def __init__(
@@ -36,17 +65,19 @@ class DatasetNCT00364013SurvCurv(Dataset):
         self.colname_time = 't'
         self.colname_trans_to = 'g'
         self.mode = mode
+        self.ipcw_dict = get_train_ipcw(df_dir=df_dir, ds_name=ds_name)
+        self.g_to_t_max =  get_t_max_train(df_dir=df_dir, ds_name=ds_name)
 
-        self.subjects, self.X, self.g, self.t, self.y = self._get_df_Xy()
+        self.subjects, self.X, self.g, self.t, self.y, self.weight= self._get_df_Xy()
 
     def __len__(self):
         return self.y.shape[0]
 
     def __getitem__(self, index):
         if self.separate_g_from_feats:
-            return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index]
+            return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index], self.weight[index]
         else:
-            return self.subjects[index], self.X[index], self.t[index], self.y[index]
+            return self.subjects[index], self.X[index], self.t[index], self.y[index], self.weight[index]
         
     def _single_event_to_5_times(self, single_event):
 
@@ -55,36 +86,44 @@ class DatasetNCT00364013SurvCurv(Dataset):
         single_event = single_event.iloc[0, :]
         
         out_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = np.nan
+        out_df[COLNAME_WEIGHT] = np.nan
+        event_time = single_event[self.colname_time]
+        g = single_event['g']
+        ipcw = self.ipcw_dict[g]
+        t_max = self.g_to_t_max[g]
         if single_event['event_observed']:
-            left = single_event[self.colname_time]/self.t_resol
-            t = truncnorm.rvs(a=-left, b=3, loc=0.0, scale=self.t_resol, size=5)
-            t = np.array(list(set(t).union([0])))
-            out_df[COLNAME_SURVIVAL_DURATION] = single_event[self.colname_time] + t
+            t = uniform.rvs(loc=0.0, scale=t_max, size=5)
+            t = np.array(list(set(t).union([event_time])))
+            out_df[COLNAME_SURVIVAL_DURATION] = t
+
             selector = out_df[COLNAME_SURVIVAL_DURATION] < 0
             out_df.loc[selector, COLNAME_SURVIVAL_DURATION] = 0
-            out_df.loc[
-                out_df[COLNAME_SURVIVAL_DURATION] < single_event[self.colname_time], 
-                COLNAME_SURVIVAL_EVENT_OBSERVED
-            ] = 0
-            out_df.loc[
-                out_df[COLNAME_SURVIVAL_DURATION] >= single_event[self.colname_time], 
-                COLNAME_SURVIVAL_EVENT_OBSERVED
-            ] = 1
+
+            selector = out_df[COLNAME_SURVIVAL_DURATION] < event_time
+            out_df.loc[selector, COLNAME_SURVIVAL_EVENT_OBSERVED] = 0
+            out_df.loc[selector, COLNAME_WEIGHT] = ipcw(out_df.loc[selector, COLNAME_SURVIVAL_DURATION])
+
+            selector = ~selector
+            out_df.loc[selector, COLNAME_SURVIVAL_EVENT_OBSERVED] = 1
+            out_df.loc[selector, COLNAME_WEIGHT] = ipcw(event_time)
         else:
-            if single_event[self.colname_time]:
-                t = truncnorm.rvs(a=0, b=single_event[self.colname_time]/self.t_resol, loc=0.0, scale=self.t_resol, size=2)
-                t = np.array(list(set(t).union([0])))
+            if event_time:
+                t = uniform.rvs(loc=0.0, scale=event_time, size=5)
+                t = np.array(list(set(t).union([event_time])))
             else:
                 t = 0
-            out_df[COLNAME_SURVIVAL_DURATION] = single_event[self.colname_time] - t
+            out_df[COLNAME_SURVIVAL_DURATION] = t
+
             selector = out_df[COLNAME_SURVIVAL_DURATION] < 0
             out_df.loc[selector, COLNAME_SURVIVAL_DURATION] = 0
             out_df.loc[
-                out_df[COLNAME_SURVIVAL_DURATION] <= single_event[self.colname_time], 
+                out_df[COLNAME_SURVIVAL_DURATION] <= event_time, 
                 COLNAME_SURVIVAL_EVENT_OBSERVED
             ] = 0
+            out_df[COLNAME_WEIGHT] = ipcw(out_df[COLNAME_SURVIVAL_DURATION])
         
         assert out_df[COLNAME_SURVIVAL_EVENT_OBSERVED].notna().all()
+        assert out_df[COLNAME_WEIGHT].notna().all()
         return out_df
         
 
@@ -116,6 +155,12 @@ class DatasetNCT00364013SurvCurv(Dataset):
 
         event_g_at_t_obs = pd.read_csv(self.path_event_g_at_t_obs, index_col=0)
         assert self.colname_traj_id in event_g_at_t_obs.columns
+        for g in event_g_at_t_obs['g'].unique():
+            selector = event_g_at_t_obs['g'] == g
+            ipcw = self.ipcw_dict[g]
+            event_g_at_t_obs.loc[selector, COLNAME_WEIGHT] = ipcw(
+                event_g_at_t_obs.loc[selector,self.colname_time]
+            )
         
         df_trans_time = event_g_at_t_obs.rename(
             columns={
@@ -126,15 +171,17 @@ class DatasetNCT00364013SurvCurv(Dataset):
         )
         df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
+        assert df_xy.notna().all().all()
         return df_xy
      
-    def _get_df_Xy_around_t(self):
+    def _get_df_Xy_around_t(self): # entries include event time and t_res before the event time
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
 
         event_g_at_t_obs = pd.read_csv(self.path_event_g_at_t_obs, index_col=0)
         assert self.colname_traj_id in event_g_at_t_obs.columns
+
         event_g_at_t_obs_before = event_g_at_t_obs.copy()
         event_g_at_t_obs_before[self.colname_time] = event_g_at_t_obs_before[self.colname_time] - self.t_resol
         selector = event_g_at_t_obs_before[self.colname_time] < 0
@@ -148,11 +195,18 @@ class DatasetNCT00364013SurvCurv(Dataset):
                 'event_observed':COLNAME_SURVIVAL_EVENT_OBSERVED
             }
         )
+    
+        for g in df_trans_time['g'].unique():
+            selector = df_trans_time['g'] == g
+            ipcw = self.ipcw_dict[g]
+            df_trans_time.loc[selector, COLNAME_WEIGHT] = ipcw(
+                df_trans_time.loc[selector,COLNAME_SURVIVAL_DURATION]
+            )
         df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
         return df_xy  
 
-    def _single_event_to_trans_times(self, single_event, t_min, t_max):
+    def _single_event_to_grid_times(self, single_event, t_min, t_max):
         t = [i for i in range(int(t_min), int(t_max)+1, self.t_resol)] + [t_max]
         t = sorted(set(t))
 
@@ -175,6 +229,7 @@ class DatasetNCT00364013SurvCurv(Dataset):
                 out_df[COLNAME_SURVIVAL_DURATION] <= single_event[self.colname_time], 
                 COLNAME_SURVIVAL_EVENT_OBSERVED
             ] = 0
+        out_df[COLNAME_WEIGHT] = 1
         return out_df
     
     def _get_df_Xy_true_prob(self):
@@ -189,7 +244,7 @@ class DatasetNCT00364013SurvCurv(Dataset):
             [self.colname_traj_id,'g'],
             group_keys=True
         ).apply(
-            lambda df: self._single_event_to_trans_times(df, t_min, t_max)
+            lambda df: self._single_event_to_grid_times(df, t_min, t_max)
         ).reset_index(level=[0,1]).rename(
             columns={
                 'g':self.colname_trans_to
@@ -210,6 +265,7 @@ class DatasetNCT00364013SurvCurv(Dataset):
             df_Xy = self._get_df_Xy_multi_t()
         else:
             raise NotImplementedError
+        df_Xy[COLNAME_WEIGHT] = df_Xy[COLNAME_WEIGHT]/df_Xy[COLNAME_WEIGHT].sum() * df_Xy.shape[0]
         df_Xy[self.colname_trans_to] = df_Xy[self.colname_trans_to]/2
         cols_subj_feats = sorted([i for i in df_Xy.columns if i.startswith('feat')])
         if self.separate_g_from_feats:
@@ -218,7 +274,8 @@ class DatasetNCT00364013SurvCurv(Dataset):
             g = torch.tensor(df_Xy[[self.colname_trans_to]].values.astype(np.float64), dtype=torch.float32)
             t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values.astype(np.float64), dtype=torch.float32)
             y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values.astype(np.float64), dtype=torch.float32)
-            return subjects, X,g,t,y
+            weight = torch.tensor(df_Xy[[COLNAME_WEIGHT]].values.astype(np.float64), dtype=torch.float32)
+            return subjects, X,g,t,y, weight
         
         else:
             subjects = df_Xy[self.colname_traj_id]
@@ -227,7 +284,8 @@ class DatasetNCT00364013SurvCurv(Dataset):
             g = None
             t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values.astype(np.float64), dtype=torch.float32)
             y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values.astype(np.float64), dtype=torch.float32)
-            return subjects,X,g,t,y
+            weight = torch.tensor(df_Xy[[COLNAME_WEIGHT]].values.astype(np.float64), dtype=torch.float32)
+            return subjects,X,g,t,y, weight
 
 class DataModuleNCT00364013SurvCurv(LightningDataModule):
     def __init__(
