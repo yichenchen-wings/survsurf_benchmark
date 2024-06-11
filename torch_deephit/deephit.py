@@ -131,7 +131,7 @@ class DeepHit(nn.Module):
             out_features=self.k_compete_events*self.t_size, 
             bias=True
         )
-        head_act = self.act_cls()
+        head_act = nn.Softmax()
         self.head = nn.ModuleList([head_linear, head_act])
 
     def _apply_block_shared_base(self, x):
