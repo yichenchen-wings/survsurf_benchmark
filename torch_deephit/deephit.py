@@ -74,8 +74,9 @@ class FCNet(nn.Module):
             self.layers.append(drop)
     
     def forward(self, x):
-        return self.layers(x)
-                
+        for layer in self.layers:
+            x = layer(x)
+        return x
                         
 class DeepHit(nn.Module):
     def __init__(
@@ -151,7 +152,10 @@ class DeepHit(nn.Module):
         return out
     
     def _apply_head(self, x):
-        return self.head(x)
+        for layer in self.head:
+            x = layer(x)
+        return x
+
     
     def forward(self, x):
         bs, n_feats = x.shape
@@ -159,8 +163,13 @@ class DeepHit(nn.Module):
         out = self._apply_blocks_cause_spcfc(out)
         out = self._apply_head(out)
         out = out.reshape(bs, self.k_compete_events, self.t_size)
+        out = out/out.sum(dim=-1).reshape(bs, self.k_compete_events, 1)
         return out
-
+    
+    def forward_cif(self, x):
+        f = self.forward(x)
+        out = torch.cumsum(f, dim=-1)
+        return out
 
 
 
