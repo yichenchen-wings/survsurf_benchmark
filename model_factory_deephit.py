@@ -245,7 +245,7 @@ class LossBrierDeepHit:
     def __call__(self, model, batch):
         return self.loss_brier(model, batch)
 
-class LossSumoDeepHitTrans:
+class LossSumoDeepHit:
     def __init__(self, t_size, t_res, g_resol=None):
         self.t_size = t_size
         self.t_res = t_res
