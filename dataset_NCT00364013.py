@@ -51,7 +51,7 @@ class DatasetNCT00364013SurvCurv(Dataset):
             ds_name, 
             g_resol, 
             split: Literal['train', 'tune', 'val', 'test'], 
-            mode:Literal['obs_only', 'multi_t', 'true_probs_grid', 'true_probs_around_t'],
+            mode:Literal['obs_only','obs_only_traj', 'multi_t', 'true_probs_grid', 'true_probs_around_t'],
             separate_g_from_feats: bool,
             t_resol=30
         ):
@@ -146,6 +146,103 @@ class DatasetNCT00364013SurvCurv(Dataset):
         df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
         return df_xy 
+    
+    def _single_traj_from_obs(self, df):
+        assert df.shape[0] == 2
+        df = df.sort_values('g')
+        assert all(df['g'].values == np.array([1,2]))
+
+        both_observed = all(df['event_observed'] == 1)
+        one_observed = df['event_observed'].sum() == 1
+        both_equal = df[self.colname_time].nunique() == 1
+
+        
+        t_g1_start = df.loc[df['g'] == 1, self.colname_time].iloc[0]
+        t_g2_start = df.loc[df['g'] == 2, self.colname_time].iloc[0]
+
+        out_df = []
+        if both_observed and both_equal:
+            entry = {
+                self.colname_trans_to: 2,
+                COLNAME_SURVIVAL_DURATION: t_g1_start,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:1,
+            }
+            out_df.append(entry)
+        elif both_observed:
+            t_g1_end = t_g2_start - self.g_resol
+            t_g1_end = max((t_g2_start+t_g1_start)/2, t_g1_end)
+            entry = {
+                self.colname_trans_to: 1,
+                COLNAME_SURVIVAL_DURATION: t_g1_start,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:1,
+            }
+            out_df.append(entry)
+
+            entry = {
+                self.colname_trans_to: 1,
+                COLNAME_SURVIVAL_DURATION: t_g1_end,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:1
+            }
+            out_df.append(entry)
+            
+            entry = {
+                self.colname_trans_to: 2,
+                COLNAME_SURVIVAL_DURATION: t_g2_start,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:1
+            }
+            out_df.append(entry)
+        elif one_observed:
+            assert all(df.loc[df['g'] == 1, 'event_observed'] == 1)
+            entry = {
+                self.colname_trans_to: 1,
+                COLNAME_SURVIVAL_DURATION: t_g1_start,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:1
+            }
+            out_df.append(entry)
+            
+            entry = {
+                self.colname_trans_to: 1,
+                COLNAME_SURVIVAL_DURATION: t_g2_start,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:1
+            }
+            out_df.append(entry)
+        else:
+            entry = {
+                self.colname_trans_to: 1,
+                COLNAME_SURVIVAL_DURATION: t_g1_start,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:0
+            }
+            out_df.append(entry)
+            
+            entry = {
+                self.colname_trans_to: 2,
+                COLNAME_SURVIVAL_DURATION: t_g2_start,
+                COLNAME_SURVIVAL_EVENT_OBSERVED:0
+            }
+            out_df.append(entry)
+        out_df = pd.DataFrame(out_df)
+        out_df[COLNAME_WEIGHT] = 1
+        return out_df
+
+    def _get_df_Xy_obs_traj(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        event_g_at_t_obs = pd.read_csv(self.path_event_g_at_t_obs, index_col=0)
+        df_trans_time = event_g_at_t_obs.groupby(
+            [self.colname_traj_id],
+            group_keys=True
+        ).apply(
+            lambda df: self._single_traj_from_obs(df)
+        ).reset_index(level=[0]).rename(
+            columns={
+                'g':self.colname_trans_to
+            }
+        )
+        df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.reset_index(drop=True)
+        return df_xy
 
 
     def _get_df_Xy_obs(self):
@@ -257,6 +354,8 @@ class DatasetNCT00364013SurvCurv(Dataset):
     def _get_df_Xy(self):
         if self.mode == 'obs_only':
             df_Xy = self._get_df_Xy_obs()
+        elif self.mode == 'obs_only_traj':
+            df_Xy = self._get_df_Xy_obs_traj()
         elif self.mode == 'true_probs_grid':
             df_Xy = self._get_df_Xy_true_prob()
         elif self.mode == 'true_probs_around_t':

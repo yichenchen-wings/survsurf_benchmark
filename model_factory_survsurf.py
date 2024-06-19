@@ -102,9 +102,9 @@ class LOSSBrierTRes:
         else:
             raise NotImplementedError
 
-    
 
-class LOSSDyDt:
+
+class LossDyDt: # this is the Sumo loss
     def __init__(self, t_res):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
@@ -154,6 +154,63 @@ class LOSSDyDt:
             return self.loss_dy_t_res(model, batch)
         else:
             return self.loss_dydt(model, batch)
+        
+LOSSDyDt = LossDyDt
+
+
+class LossDyDtEmphPos: # this is the Sumo loss
+    def __init__(self, t_res):
+        self.t_res = t_res
+    def loss_dydt(self, model, batch): 
+        subjects, Xs, gs, ts, ys, weight = batch
+        ts.requires_grad_()
+        outputs = model(batch)
+
+        dydt = torch.autograd.grad(
+            outputs=outputs,
+            inputs=ts,
+            grad_outputs=torch.ones_like(outputs),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+        dydt = torch.clamp(dydt, 1e-6, np.inf)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = 1*(
+            ys*torch.log(outputs)
+            + ys*torch.log(dydt) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+            + (1-ys)*torch.log(1-outputs) 
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def loss_dy_t_res(self, model, batch):
+        subjects, Xs, gs, ts, ys, weight = batch
+        outputs = model(batch)
+        
+        t_before =  ts - self.t_res
+        t_before =  torch.clamp(t_before, 0, torch.inf)
+
+        batch_t_before = (subjects, Xs, gs, t_before, ys, weight )
+        outputs_t_before = model(batch_t_before)
+
+        dy = outputs - outputs_t_before
+
+        dy = torch.clamp(dy, 1e-6, 1-1e-6)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = 1*(
+            ys*torch.log(outputs) 
+            + ys*torch.log(dy) # if observed g (g > 0) at t, then dy/dt (i.e. prob of g occurring by or at t) for (t,g,x) should be high.
+            + (1-ys)*torch.log(1-outputs) 
+        )
+        losses = -torch.mean(losses)
+        return losses
+    
+    def __call__(self, model, batch):
+        if self.t_res:
+            return self.loss_dy_t_res(model, batch)
+        else:
+            return self.loss_dydt(model, batch)
+
 
 def loss_bce(model, batch):
     subjects, Xs, gs, ts, ys, weight = batch
@@ -164,7 +221,7 @@ def loss_bce(model, batch):
     losses = loss_fn(outputs, ys, ts)
     return losses
 
-class LossDySimple:
+class LossSumo: # wrong name actually LossDyDgSimple
     def __init__(self, t_res=None, g_res=1/5):
         self.g_res=g_res
         pass

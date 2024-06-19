@@ -5,7 +5,7 @@ import time
 start_time = time.time()
 
 
-parser = argparse.ArgumentParser(description='Train a SurvSurf model on a dataset')
+parser = argparse.ArgumentParser(description='Train a DeepHit model on a dataset')
 parser.add_argument(
     '-s', '--seed', 
     type=int,
@@ -33,34 +33,34 @@ PROJ_NAME = 'SurvSurfBenchmark_NCT00364013'
 SEEDS = [args.seed]
 
 config = {
-    'dropout':None,
+    'dropout':0.6,
     'dir_runtime_results':'./runtime_results',
-    'model_getter':'get_SurvSurf',
+    'model_getter':'get_DeepHit',
     'ds_name':'real_NCT00364013',
     'datamodule':'DataModuleNCT00364013SurvCurv',
-    'train_mode':'multi_t',
+    'train_mode':'obs_only',
     'eval_mode':'multi_t',
-    'loss':'LossBrierSimple',
-    'n_hidden_layers':16,
-    'n_hidden_dim':32,
+    'loss':'LossSumoDeepHitTrans',
+    'n_hidden_layers':2,
+    'n_hidden_dim':128,
     'g_resol':0.5,
-    'batch_size':16*5,
-    'patience':50,
-    'max_epoch':300,
+    'batch_size':16,
+    'patience':100,
+    'max_epoch':800,
     'accum_grad_batches':1,
     'lr':5e-4,
-    'weight_decay':5e-2,
+    'weight_decay':2e-2,
     'device':'cpu',
     'save_top_k':1,
     't_res_in_loss':30, 
-    't_res_at_trans':180,
+    't_res_at_trans':30,
     'watch_model':False, # if True then model checkpoint will not be compatible to the pytorch-lightning model wrapper TODO: investigate when have time
 }
 
 from pl_wrapper import STR_VAL_LOSS
-from model_factory_survsurf import LitModelSurvSurf
-import model_factory_survsurf
-model_getter = model_factory_survsurf.__dict__[config['model_getter']]
+from model_factory_deephit import LitModelDeepHit
+import model_factory_deephit
+model_getter = model_factory_deephit.__dict__[config['model_getter']]
 
 import torch
 torch.set_float32_matmul_precision('medium')
@@ -95,7 +95,7 @@ for seed in SEEDS:
         df_dir='/home/yc366/repos/survsurf_benchmark/dataset_split', 
         ds_name=run.config.ds_name, 
         g_resol=run.config.g_resol, 
-        separate_g_from_feats=True, 
+        separate_g_from_feats=False, 
         batch_size=run.config.batch_size, 
         num_workers=4,
         t_resol=run.config.t_res_at_trans,
@@ -103,20 +103,26 @@ for seed in SEEDS:
         eval_mode=run.config.eval_mode
     )
 
-
+    t_max = 1500
+    t_size=t_max//run.config.t_res_in_loss+1
     model = model_getter(
         n_input_feats_g_excl=datamodule.n_feats_g_excl,
-        t_max=900,
-        n_hidden_layers=run.config.n_hidden_layers,
-        n_hidden_dim=run.config.n_hidden_dim,
+        t_size=t_size,
+        h_dim_shared=run.config.n_hidden_dim,
+        h_dim_cause_spcfc=run.config.n_hidden_dim,
+        n_layers_shared=run.config.n_hidden_layers,
+        n_layers_cause_spcfc=run.config.n_hidden_layers,
+        dropout=run.config.dropout
     )
 
-    loss_fn_cls = model_factory_survsurf.__dict__[config['loss']]
-    loss_fn = loss_fn_cls(t_res=run.config.t_res_in_loss)
+    loss_fn_cls = model_factory_deephit.__dict__[config['loss']]
+    loss_fn = loss_fn_cls(t_size=t_size, t_res=run.config.t_res_in_loss, g_resol=run.config.g_resol)
 
-    model_lit = LitModelSurvSurf(
+    model_lit = LitModelDeepHit(
         model=model, 
         loss_fn=loss_fn, 
+        t_size=t_size,
+        t_res=run.config.t_res_in_loss,
         lr=run.config.lr,
         weight_decay=run.config.weight_decay
     )
