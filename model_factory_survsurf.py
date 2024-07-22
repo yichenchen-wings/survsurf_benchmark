@@ -40,8 +40,8 @@ class LossBrierSimple:
         return self.loss_brier(model, batch)
 
 
-class LossDyDt: # this is the Sumo loss
-    def __init__(self, t_res):
+class LossSumo:
+    def __init__(self, t_res, g_res=None):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
         subjects, Xs, gs, ts, ys, weight = batch
@@ -93,7 +93,7 @@ class LossDyDt: # this is the Sumo loss
 
 
 class LossDyDtEmphPos:
-    def __init__(self, t_res):
+    def __init__(self, t_res, g_res=None):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
         subjects, Xs, gs, ts, ys, weight = batch
@@ -147,7 +147,7 @@ class LossDyDtEmphPos:
 
 
 class LossDyDgEmphPos:
-    def __init__(self, t_res=None, g_res=1/5):
+    def __init__(self, t_res=None, g_res=1):
         self.g_res=g_res
     
     def loss_dy_g_res(self, model, batch):
@@ -172,7 +172,7 @@ class LossDyDgEmphPos:
         return self.loss_dy_g_res(model, batch)
     
 class LossDyDg:
-    def __init__(self, t_res=None, g_res=1/5):
+    def __init__(self, t_res=None, g_res=1):
         self.g_res=g_res
     
     def loss_dydg(self, model, batch):
@@ -254,24 +254,27 @@ class LitModelSurvSurf(LitModel):
                 loss = self.loss_fn(self, batch)
                 eval_res = dict()
                 eval_res['loss'] = loss.detach()
+                eval_res['batch_size'] = batch[0].shape[0]
                 self.validation_loss.append(eval_res)
             if dataloader_idx == 1:
                 # Compute the loss
                 loss = self.eval_fn(self, batch)
                 eval_res = dict()
                 eval_res['brier_on_probs'] = loss.detach()
+                eval_res['batch_size'] = batch[0].shape[0]
                 self.validation_brier_on_probs.append(eval_res)
 
-    def on_validation_epoch_end(self):
-        val_loss = sum(output['loss'] for output in self.validation_loss) / len(self.validation_loss)
+    def on_validation_epoch_end(self):        
+        N = sum(output['batch_size'] for output in self.validation_loss)
+        val_loss = sum(output['loss']*output['batch_size'] for output in self.validation_loss) / N
         self.log(STR_VAL_LOSS, val_loss)
 
         if self.print_epoch:
             message = f'EPOCH:{self.epochs_run} val loss: {val_loss.item()}'
             print(message)
 
-        
-        val_brier = sum(output['brier_on_probs'] for output in self.validation_brier_on_probs) / len(self.validation_brier_on_probs)
+        N = sum(output['batch_size'] for output in self.validation_brier_on_probs)
+        val_brier = sum(output['brier_on_probs']*output['batch_size'] for output in self.validation_brier_on_probs) / N
         self.log('val_score_brier', val_brier)
 
         if self.print_epoch:

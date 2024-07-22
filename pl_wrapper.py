@@ -26,6 +26,7 @@ class LitModel(pl.LightningModule):
 
         eval_res = dict()
         eval_res['loss'] = loss.detach()
+        eval_res['batch_size'] = batch[0].shape[0]
         self.training_step_outputs.append(eval_res)
         return loss
 
@@ -51,11 +52,13 @@ class LitModel(pl.LightningModule):
 
         eval_res = dict()
         eval_res['loss'] = loss.detach()
+        eval_res['batch_size'] = batch[0].shape[0]
         self.validation_step_outputs.append(eval_res)
 
     def on_train_epoch_end(self):
         self.epochs_run += 1
-        train_loss = sum(output['loss'] for output in self.training_step_outputs) / len(self.training_step_outputs)
+        N = sum(output['batch_size'] for output in self.training_step_outputs)
+        train_loss = sum(output['loss']*output['batch_size'] for output in self.training_step_outputs) / N
         self.log("train_loss", train_loss)
 
         if self.print_epoch:
@@ -65,7 +68,8 @@ class LitModel(pl.LightningModule):
         self.training_step_outputs.clear()
 
     def on_validation_epoch_end(self):
-        val_loss = sum(output['loss'] for output in self.validation_step_outputs) / len(self.validation_step_outputs)
+        N = sum(output['batch_size'] for output in self.validation_step_outputs)
+        val_loss = sum(output['loss']*output['batch_size'] for output in self.validation_step_outputs) / N
         self.log(STR_VAL_LOSS, val_loss)
 
         if self.print_epoch:

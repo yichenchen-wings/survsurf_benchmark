@@ -39,7 +39,7 @@ def get_DeepHit(
     return model
 
 class LossBrierDeepHitTrans:
-    def __init__(self, t_size, t_res, g_resol=None):
+    def __init__(self, t_size, t_res, g_res=None):
         self.t_size = t_size
         self.t_res = t_res
         self.tmax_allowed = self.t_size*self.t_res
@@ -91,10 +91,10 @@ class LossBrierDeepHitTrans:
     
 
 class LossDyDgEmphPos:
-    def __init__(self, t_size, t_res, g_resol):
+    def __init__(self, t_size, t_res, g_res):
         self.t_size = t_size
         self.t_res = t_res
-        self.g_resol = g_resol
+        self.g_resol = g_res
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_dydg(self, model, batch):
@@ -147,10 +147,10 @@ class LossDyDgEmphPos:
         return self.loss_dydg(model, batch)
 
 class LossDyDg:
-    def __init__(self, t_size, t_res, g_resol):
+    def __init__(self, t_size, t_res, g_res):
         self.t_size = t_size
         self.t_res = t_res
-        self.g_resol = g_resol
+        self.g_resol = g_res
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_dydg(self, model, batch):
@@ -203,7 +203,7 @@ class LossDyDg:
 
 
 class LossBrierDeepHit:
-    def __init__(self, t_size, t_res, g_resol=None):
+    def __init__(self, t_size, t_res, g_res=None):
         self.t_size = t_size
         self.t_res = t_res
         self.tmax_allowed = self.t_size*self.t_res
@@ -245,8 +245,8 @@ class LossBrierDeepHit:
     def __call__(self, model, batch):
         return self.loss_brier(model, batch)
 
-class LossSumoDeepHit:
-    def __init__(self, t_size, t_res, g_resol=None):
+class LossSumo:
+    def __init__(self, t_size, t_res, g_res=None):
         self.t_size = t_size
         self.t_res = t_res
         self.tmax_allowed = self.t_size*self.t_res
@@ -330,24 +330,27 @@ class LitModelDeepHit(LitModel):
             loss = self.loss_fn(self, batch)
             eval_res = dict()
             eval_res['loss'] = loss.detach()
+            eval_res['batch_size'] = batch[0].shape[0]
             self.validation_loss.append(eval_res)
         if dataloader_idx == 1:
             # Compute the loss
             loss = self.loss_brier(self, batch)
             eval_res = dict()
             eval_res['brier_on_probs'] = loss.detach()
+            eval_res['batch_size'] = batch[0].shape[0]
             self.validation_brier_on_probs.append(eval_res)
 
     def on_validation_epoch_end(self):
-        val_loss = sum(output['loss'] for output in self.validation_loss) / len(self.validation_loss)
+        N = sum(output['batch_size'] for output in self.validation_loss)
+        val_loss = sum(output['loss']*output['batch_size'] for output in self.validation_loss) / N
         self.log(STR_VAL_LOSS, val_loss)
 
         if self.print_epoch:
             message = f'EPOCH:{self.epochs_run} val loss: {val_loss.item()}'
             print(message)
 
-        
-        val_brier = sum(output['brier_on_probs'] for output in self.validation_brier_on_probs) / len(self.validation_brier_on_probs)
+        N = sum(output['batch_size'] for output in self.validation_brier_on_probs)
+        val_brier = sum(output['brier_on_probs']*output['batch_size'] for output in self.validation_brier_on_probs) / N        
         self.log('val_score_brier', val_brier)
 
         if self.print_epoch:

@@ -1,16 +1,22 @@
 # %%
 import argparse
+from pathlib import Path
 
 import time
 start_time = time.time()
 
 
-parser = argparse.ArgumentParser(description='Train a SurvSurf model on a dataset')
+parser = argparse.ArgumentParser(description='Train a DeepHit model on a dataset')
 parser.add_argument(
     '-s', '--seed', 
     type=int,
-    default=10,
     help='random seed to use'
+)
+
+parser.add_argument(
+    '-c', '--config', 
+    type=Path,
+    help='path to the config JSON'
 )
 args = parser.parse_args()
 
@@ -27,35 +33,16 @@ import wandb
 from pl_train import pl_wdb_train
 wandb.login()
 
+import json
+with open(args.config, 'r') as f:
+    proj_exp_config = json.load(f)
 
 
-PROJ_NAME = 'SurvSurfBenchmark_Markov'
+
+PROJ_NAME = proj_exp_config["project_name"]
 SEEDS = [args.seed]
 
-config = {
-    'dropout':0.6,
-    'dir_runtime_results':'./runtime_results',
-    'model_getter':'get_DeepHit',
-    'ds_name':'markov_32feat_11t5g_more_balanced',
-    'datamodule':'DataModuleMarkovSurvSurf',
-    'train_mode':'full_traj_obs_only',
-    'eval_mode':'true_probs_grid',
-    'loss':'LossDyDg',
-    'n_hidden_layers':2,
-    'n_hidden_dim':128,
-    'g_resol':0.5,
-    'batch_size':64,
-    'patience':100,
-    'max_epoch':800,
-    'accum_grad_batches':1,
-    'lr':2e-4,
-    'weight_decay':2e-2,
-    'device':'cpu',
-    'save_top_k':1,
-    't_res_in_loss':1, 
-    't_res_at_trans':1,
-    'watch_model':False, # if True then model checkpoint will not be compatible to the pytorch-lightning model wrapper TODO: investigate when have time
-}
+config = {k:v for k,v in proj_exp_config.items() if k != "project_name"}
 
 from pl_wrapper import STR_VAL_LOSS
 from model_factory_deephit import LitModelDeepHit
@@ -89,7 +76,7 @@ for seed in SEEDS:
     pl.seed_everything(seed=run.config.seed)
     
     import datasets
-    data_module_cls = datasets.__dict__[config['datamodule']]
+    data_module_cls = datasets.__dict__[run.config.datamodule]
 
     datamodule = data_module_cls(
         df_dir='/home/yc366/repos/survsurf_benchmark/dataset_split', 
@@ -103,7 +90,7 @@ for seed in SEEDS:
         eval_mode=run.config.eval_mode
     )
 
-    t_max = 11
+    t_max = run.config.t_max
     t_size=t_max//run.config.t_res_in_loss+1
     model = model_getter(
         n_input_feats_g_excl=datamodule.n_feats_g_excl,
@@ -115,8 +102,12 @@ for seed in SEEDS:
         dropout=run.config.dropout
     )
 
-    loss_fn_cls = model_factory_deephit.__dict__[config['loss']]
-    loss_fn = loss_fn_cls(t_size=t_size, t_res=run.config.t_res_in_loss, g_resol=run.config.g_resol)
+    loss_fn_cls = model_factory_deephit.__dict__[run.config.loss]
+    loss_fn = loss_fn_cls(
+        t_size=t_size, 
+        t_res=run.config.t_res_in_loss, 
+        g_res=run.config.g_resol/datamodule.g_max #need to be in normalized scale, not in raw units
+    )
 
     model_lit = LitModelDeepHit(
         model=model, 

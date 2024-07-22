@@ -10,6 +10,7 @@ ds_name_to_n_feats_mapping = {
     'markov_3feat11t5g_more_balanced':3,
     'markov_3feat11t5g_less_balanced':3,
     'markov_32feat_11t5g_more_balanced':32,
+    'markov_32feat_11t5g_more_balanced_largeN':32,
     'markov_32feat_11t5g_less_balanced':32
 }
 
@@ -57,7 +58,8 @@ class DatasetMarkovSurvSurf(Dataset):
             split: Literal['train', 'tune', 'val', 'test'], 
             mode:Literal['first_cross_obs_only', 'full_traj_obs_only', 'true_probs_grid'],
             separate_g_from_feats: bool,
-            t_resol=1
+            t_resol=1,
+            g_max=5
         ):
         assert t_resol == 1
         self.split = split
@@ -70,6 +72,7 @@ class DatasetMarkovSurvSurf(Dataset):
         self.colname_traj_id = 'subject'
         self.colname_time = 't'
         self.colname_g = 'g_max_by_time'
+        self.g_max = g_max
 
         self.subjects, self.X, self.g, self.t, self.y, self.weight= self._get_df_Xy()
 
@@ -200,7 +203,7 @@ class DatasetMarkovSurvSurf(Dataset):
             df_Xy = self._get_df_Xy_true_prob()
         else:
             raise NotImplementedError
-        df_Xy[self.colname_g] = df_Xy[self.colname_g]/5
+        df_Xy[self.colname_g] = df_Xy[self.colname_g]/self.g_max
         cols_subj_feats = sorted([i for i in df_Xy.columns if i.startswith('feat')])
         if self.separate_g_from_feats:
             subjects = df_Xy[self.colname_traj_id]
@@ -232,7 +235,8 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             num_workers,
             train_mode:Literal['first_cross_obs_only','full_traj_obs_only'],
             eval_mode:Literal['first_cross_obs_only', 'true_probs_grid'], 
-            t_resol=None
+            t_resol=None,
+            g_max=5
         ):
     
         super().__init__()
@@ -245,6 +249,7 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
         self.n_feats_g_excl = ds_name_to_n_feats_mapping[ds_name]
         self.train_mode = train_mode
         self.eval_mode = eval_mode
+        self.g_max = g_max
     def train_dataloader(self):
         train_split = DatasetMarkovSurvSurf(
             self.df_dir, 
@@ -252,7 +257,9 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             self.g_resol, 
             split='train', 
             mode=self.train_mode, 
-            separate_g_from_feats=self.separate_g_from_feats)
+            separate_g_from_feats=self.separate_g_from_feats,
+            g_max=self.g_max
+        )
         return DataLoader(train_split, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
     
     def val_dataloader(self):
@@ -262,7 +269,8 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             self.g_resol, 
             split='val', 
             mode=self.train_mode, 
-            separate_g_from_feats=self.separate_g_from_feats
+            separate_g_from_feats=self.separate_g_from_feats,
+            g_max=self.g_max
         )
         as_true_prob = DatasetMarkovSurvSurf(
             self.df_dir, 
@@ -270,7 +278,8 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             self.g_resol, 
             split='val', 
             mode=self.eval_mode, 
-            separate_g_from_feats=self.separate_g_from_feats
+            separate_g_from_feats=self.separate_g_from_feats,
+            g_max=self.g_max
         )
 
         return [
@@ -285,7 +294,8 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             self.g_resol, 
             split='test', 
             mode=self.train_mode, 
-            separate_g_from_feats=self.separate_g_from_feats
+            separate_g_from_feats=self.separate_g_from_feats,
+            g_max=self.g_max
         )
         as_true_prob = DatasetMarkovSurvSurf(
             self.df_dir, 
@@ -293,7 +303,8 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             self.g_resol, 
             split='test', 
             mode=self.eval_mode, 
-            separate_g_from_feats=self.separate_g_from_feats
+            separate_g_from_feats=self.separate_g_from_feats,
+            g_max=self.g_max
         )
 
         return [
