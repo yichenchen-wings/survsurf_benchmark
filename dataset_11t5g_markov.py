@@ -142,20 +142,10 @@ class DatasetMarkovSurvSurf(Dataset):
         rows_event_df[COLNAME_SURVIVAL_DURATION] = df_single_traj[self.colname_time].values
         rows_event_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = True
         rows_event_df[self.colname_g] = df_single_traj[self.colname_g].values
-
-        rows_event_df.loc[
-            rows_event_df[self.colname_g] == 0,
-            COLNAME_SURVIVAL_EVENT_OBSERVED
-        ]  = False
-        
-        rows_event_df.loc[
-            rows_event_df[self.colname_g] == 0,
-            self.colname_g
-        ]  = self.g_resol
         
         return rows_event_df
     
-    def _get_df_Xy_full_traj_obs(self):
+    def _get_df_Xy_full_traj_obs(self, g0_as_gres=True):
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -166,8 +156,22 @@ class DatasetMarkovSurvSurf(Dataset):
         df_trans_time = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
             self._single_traj_full_to_label
         ).reset_index(level=0)
-        df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
-        df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
+
+        if g0_as_gres:
+            df_trans_time.loc[
+                df_trans_time[self.colname_g] == 0,
+                COLNAME_SURVIVAL_EVENT_OBSERVED
+            ]  = False
+            
+            df_trans_time.loc[ 
+                df_trans_time[self.colname_g] == 0,
+                self.colname_g
+            ]  = self.g_resol
+
+            df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
+            df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
+        else:
+            df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
         df_xy[COL_WEIGHT] = 1
         return df_xy
