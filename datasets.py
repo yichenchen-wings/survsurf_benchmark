@@ -8,3 +8,4 @@ ds_name_to_n_feats_mapping = {
 
 from dataset_11t5g_markov import DatasetMarkovSurvSurf, DataModuleMarkovSurvSurf
 from dataset_NCT00364013 import DataModuleNCT00364013SurvCurv
+from dataset_NCT00981058 import DataModuleNCT00981058
