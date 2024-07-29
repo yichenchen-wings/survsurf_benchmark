@@ -26,7 +26,7 @@ class LitModel(pl.LightningModule):
 
         eval_res = dict()
         eval_res['loss'] = loss.detach()
-        eval_res['batch_size'] = batch[0].shape[0]
+        eval_res['batch_size'] = batch[-1].shape[0]
         self.training_step_outputs.append(eval_res)
         return loss
 
@@ -52,7 +52,7 @@ class LitModel(pl.LightningModule):
 
         eval_res = dict()
         eval_res['loss'] = loss.detach()
-        eval_res['batch_size'] = batch[0].shape[0]
+        eval_res['batch_size'] = batch[-1].shape[0]
         self.validation_step_outputs.append(eval_res)
 
     def on_train_epoch_end(self):
