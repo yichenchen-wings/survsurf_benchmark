@@ -146,6 +146,7 @@ class LossDyDgEmphPos:
     def __call__(self, model, batch):
         return self.loss_dydg(model, batch)
 
+
 class LossDyDg:
     def __init__(self, t_size, t_res, g_res):
         self.t_size = t_size
@@ -330,14 +331,14 @@ class LitModelDeepHit(LitModel):
             loss = self.loss_fn(self, batch)
             eval_res = dict()
             eval_res['loss'] = loss.detach()
-            eval_res['batch_size'] = batch[0].shape[0]
+            eval_res['batch_size'] = batch[-1].shape[0]
             self.validation_loss.append(eval_res)
         if dataloader_idx == 1:
             # Compute the loss
             loss = self.loss_brier(self, batch)
             eval_res = dict()
             eval_res['brier_on_probs'] = loss.detach()
-            eval_res['batch_size'] = batch[0].shape[0]
+            eval_res['batch_size'] = batch[-1].shape[0]
             self.validation_brier_on_probs.append(eval_res)
 
     def on_validation_epoch_end(self):

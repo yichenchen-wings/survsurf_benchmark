@@ -171,6 +171,7 @@ class LossDyDgEmphPos:
     def __call__(self, model, batch):
         return self.loss_dy_g_res(model, batch)
     
+    
 class LossDyDg:
     def __init__(self, t_res=None, g_res=1):
         self.g_res=g_res
@@ -219,6 +220,40 @@ class LossDyDg:
             return self.loss_dydg(model, batch)
 
 
+class LossDyDgSumo:
+    def __init__(self, t_res=None, g_res=1):
+        self.g_res = g_res
+        self.t_res = t_res
+    def loss(self, model, batch):
+        subjects, Xs, gs, ts, ys, weight = batch
+        outputs = model(batch)
+
+        greater_g = gs + self.g_res
+        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight )
+        outputs_greater_g  = model(batch_greater_g)
+        dydg = outputs_greater_g - outputs
+        dydg = torch.clamp(dydg, -(1-1e-6), -1e-6)
+
+        t_before =  ts - self.t_res
+        t_before =  torch.clamp(t_before, 0, torch.inf)
+        batch_t_before = (subjects, Xs, gs, t_before, ys, weight )
+        outputs_t_before = model(batch_t_before)
+        dydt = outputs - outputs_t_before
+        dydt = torch.clamp(dydt, 1e-6, 1-1e-6)
+
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses = (
+            0.5*(ys*torch.log(-dydg) + ys*torch.log(dydt))
+            + (1-ys)*torch.log(1-outputs) # censored, then g_res + g should have prob of 0 at t.
+        )
+        return -torch.mean(losses)
+    
+    def __call__(self, model, batch):
+        if self.g_res:
+            return self.loss(model, batch)
+        else:
+            raise NotImplementedError
+
 from pl_wrapper import STR_VAL_LOSS, LitModel
 
 class LitModelSurvSurf(LitModel):
@@ -254,14 +289,14 @@ class LitModelSurvSurf(LitModel):
                 loss = self.loss_fn(self, batch)
                 eval_res = dict()
                 eval_res['loss'] = loss.detach()
-                eval_res['batch_size'] = batch[0].shape[0]
+                eval_res['batch_size'] = batch[-1].shape[0]
                 self.validation_loss.append(eval_res)
             if dataloader_idx == 1:
                 # Compute the loss
                 loss = self.eval_fn(self, batch)
                 eval_res = dict()
                 eval_res['brier_on_probs'] = loss.detach()
-                eval_res['batch_size'] = batch[0].shape[0]
+                eval_res['batch_size'] = batch[-1].shape[0]
                 self.validation_brier_on_probs.append(eval_res)
 
     def on_validation_epoch_end(self):        
