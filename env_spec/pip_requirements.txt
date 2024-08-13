@@ -3,5 +3,5 @@
 
 
 # Pleas list packages you need to install via pip
-monotonic_nn_surv_surf @ git+https://yc366@gitlab.developers.cam.ac.uk/yc366/monotonic_nn_survival_surface.git@5a3fa1ae672e2e75c319e1170b533afa6dee46a4
-wandb
+monotonic_nn_surv_surf @ git+https://yc366@gitlab.developers.cam.ac.uk/yc366/monotonic_nn_survival_surface.git@4dcef7e5f1443eefc11b522fdf3d35b46b8f4d01
+wandb~=0.17.2

@@ -45,7 +45,7 @@ class LossBrierDeepHitTrans:
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_brier(self, model, batch):
-        subjects, Xs, ts, ys, weight = batch
+        subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
         torch._assert(ts.shape[-1] == 1, 'ts should have two dimensions (bs, 1)')
@@ -98,7 +98,7 @@ class LossDyDgEmphPos:
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_dydg(self, model, batch):
-        subjects, Xs, ts, ys, weight = batch
+        subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
         torch._assert(ts.shape[-1] == 1, 'ts should have two dimensions (bs, 1)')
@@ -110,7 +110,7 @@ class LossDyDgEmphPos:
 
         Xs_greater_g = Xs.clone()
         Xs_greater_g[:, -1] = Xs_greater_g[:, -1] + self.g_resol
-        batch_greater_g = (subjects, Xs_greater_g, ts, ys, weight)
+        batch_greater_g = (subjects, Xs_greater_g, ts, ys, weight, is_trans)
         
         outputs = model(batch) 
         outputs_greater_g = model(batch_greater_g) 
@@ -155,7 +155,7 @@ class LossDyDg:
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_dydg(self, model, batch):
-        subjects, Xs, ts, ys, weight = batch
+        subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
         torch._assert(ts.shape[-1] == 1, 'ts should have two dimensions (bs, 1)')
@@ -167,7 +167,7 @@ class LossDyDg:
 
         Xs_greater_g = Xs.clone()
         Xs_greater_g[:, -1] = Xs_greater_g[:, -1] + self.g_resol
-        batch_greater_g = (subjects, Xs_greater_g, ts, ys, weight)
+        batch_greater_g = (subjects, Xs_greater_g, ts, ys, weight, is_trans)
         
         outputs = model(batch) 
         outputs_greater_g = model(batch_greater_g) 
@@ -210,7 +210,7 @@ class LossBrierDeepHit:
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_brier(self, model, batch):
-        subjects, Xs, ts, ys, weight = batch
+        subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
         torch._assert(ts.shape[-1] == 1, 'ts should have two dimensions (bs, 1)')
@@ -253,7 +253,7 @@ class LossSumo:
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_sumo(self, model, batch):
-        subjects, Xs, ts, ys, weight = batch
+        subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
         torch._assert(ts.shape[-1] == 1, 'ts should have two dimensions (bs, 1)')
@@ -313,7 +313,7 @@ class LitModelDeepHit(LitModel):
         self.weight_decay = weight_decay
         self.loss_brier = LossBrierDeepHit(t_size, t_res)
     def forward(self,batch):
-        subjects, Xs, ts, ys, weight = batch
+        subjects, Xs, ts, ys, weight, is_trans = batch
         return self.model(Xs)
     
     def configure_optimizers(self):

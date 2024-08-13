@@ -1,7 +1,7 @@
 import torch
 from monotonic_nn_surv_surf.core.survival_surface_nn import SurvivalSurface
 from monotonic_nn_surv_surf.core.monotonic_net import MonotonicNet
-from soren_survcurv.losses import SuMoLoss
+from monotonic_nn_surv_surf.core.survsurf_2d_sigm import SurvSurf2DTaddTG, SurvSurf2DSigmJoLin
 import numpy as np
 
 class SurvSurfNormTG(SurvivalSurface):
@@ -16,12 +16,65 @@ def get_SurvSurf(
         n_input_feats_g_excl,
         n_hidden_layers,
         n_hidden_dim,
-        t_max
+        t_max,
+        dropout=None
 ):
 
     monotonic_net = MonotonicNet(latent_sizes=[n_input_feats_g_excl] + [n_hidden_dim]*n_hidden_layers + [1])
-
     model = SurvSurfNormTG(monotonic_net, t_max)
+    return model
+
+
+class SurvSurf2DTaddTGNormTG(SurvSurf2DTaddTG):
+    def __init__(self, z0_size, hidden_dim, n_layers, t_max, dropout=None):
+        if dropout is None:
+            dropout = 0
+        super().__init__(z0_size=z0_size, hidden_dim=hidden_dim, n_layers=n_layers, dropout=dropout)
+        self.t_max = t_max
+    
+    def forward(self, ts, gs, xs=None):
+        return super().forward(ts/self.t_max, gs, xs)
+    
+def get_SurvSurf2DTaddTG(
+        n_input_feats_g_excl,
+        n_hidden_layers,
+        n_hidden_dim,
+        t_max,
+        dropout=None
+):
+    model = SurvSurf2DTaddTGNormTG(
+        z0_size=n_input_feats_g_excl, 
+        hidden_dim=n_hidden_dim, 
+        n_layers=n_hidden_layers, 
+        t_max=t_max,
+        dropout=dropout
+    )
+    return model
+
+class SurvSurf2DSigmJoLinNormTG(SurvSurf2DSigmJoLin):
+    def __init__(self, z0_size, hidden_dim, n_layers, t_max, dropout=None):
+        if dropout is None:
+            dropout = 0
+        super().__init__(z0_size=z0_size, hidden_dim=hidden_dim, n_layers=n_layers, dropout=dropout)
+        self.t_max = t_max
+    
+    def forward(self, ts, gs, xs=None):
+        return super().forward(ts/self.t_max, gs, xs)
+    
+def get_SurvSurf2DSigmJoLin(
+        n_input_feats_g_excl,
+        n_hidden_layers,
+        n_hidden_dim,
+        t_max,
+        dropout=None
+):
+    model = SurvSurf2DSigmJoLinNormTG(
+        z0_size=n_input_feats_g_excl, 
+        hidden_dim=n_hidden_dim, 
+        n_layers=n_hidden_layers, 
+        t_max=t_max,
+        dropout=dropout
+    )
     return model
 
 
@@ -29,7 +82,7 @@ class LossBrierSimple:
     def __init__(self, t_res=None):
         pass
     def loss_brier(self, model, batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         ys = ys.type(outputs.dtype)
 
@@ -44,7 +97,7 @@ class LossSumo:
     def __init__(self, t_res, g_res=None):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         ts.requires_grad_()
         outputs = model(batch)
 
@@ -65,13 +118,13 @@ class LossSumo:
         return losses
     
     def loss_dy_t_res(self, model, batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         
         t_before =  ts - self.t_res
         t_before =  torch.clamp(t_before, 0, torch.inf)
 
-        batch_t_before = (subjects, Xs, gs, t_before, ys, weight )
+        batch_t_before = (subjects, Xs, gs, t_before, ys, weight, is_trans)
         outputs_t_before = model(batch_t_before)
 
         dy = outputs - outputs_t_before
@@ -96,7 +149,7 @@ class LossDyDtEmphPos:
     def __init__(self, t_res, g_res=None):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         ts.requires_grad_()
         outputs = model(batch)
 
@@ -118,13 +171,13 @@ class LossDyDtEmphPos:
         return losses
     
     def loss_dy_t_res(self, model, batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         
         t_before =  ts - self.t_res
         t_before =  torch.clamp(t_before, 0, torch.inf)
 
-        batch_t_before = (subjects, Xs, gs, t_before, ys, weight )
+        batch_t_before = (subjects, Xs, gs, t_before, ys, weight, is_trans)
         outputs_t_before = model(batch_t_before)
 
         dy = outputs - outputs_t_before
@@ -151,11 +204,11 @@ class LossDyDgEmphPos:
         self.g_res=g_res
     
     def loss_dy_g_res(self, model, batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         gs.requires_grad_()
         outputs = model(batch)
         greater_g = gs + self.g_res
-        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight )
+        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight, is_trans)
         outputs_greater_g  = model(batch_greater_g)
         dy = outputs_greater_g - outputs
         dy = torch.clamp(dy, -(1-1e-6), -1e-6)
@@ -177,7 +230,7 @@ class LossDyDg:
         self.g_res=g_res
     
     def loss_dydg(self, model, batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         gs.requires_grad_()
         outputs = model(batch)
 
@@ -198,10 +251,10 @@ class LossDyDg:
         return losses
     
     def loss_dy_g_res(self, model, batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         greater_g = gs + self.g_res
-        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight )
+        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight, is_trans)
         outputs_greater_g  = model(batch_greater_g)
         dy = outputs_greater_g - outputs
         dy = torch.clamp(dy, -(1-1e-6), -1e-6)
@@ -225,28 +278,65 @@ class LossDyDgSumo:
         self.g_res = g_res
         self.t_res = t_res
     def loss(self, model, batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
 
         greater_g = gs + self.g_res
-        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight )
+        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight, is_trans)
         outputs_greater_g  = model(batch_greater_g)
-        dydg = outputs_greater_g - outputs
-        dydg = torch.clamp(dydg, -(1-1e-6), -1e-6)
+        dydg = outputs - outputs_greater_g
+        dydg = torch.clamp(dydg, 1e-6, 1-1e-6)
 
         t_before =  ts - self.t_res
         t_before =  torch.clamp(t_before, 0, torch.inf)
-        batch_t_before = (subjects, Xs, gs, t_before, ys, weight )
+        batch_t_before = (subjects, Xs, gs, t_before, ys, weight, is_trans)
         outputs_t_before = model(batch_t_before)
         dydt = outputs - outputs_t_before
         dydt = torch.clamp(dydt, 1e-6, 1-1e-6)
 
         outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
         losses = (
-            0.5*(ys*torch.log(-dydg) + ys*torch.log(dydt))
-            + (1-ys)*torch.log(1-outputs) # censored, then g_res + g should have prob of 0 at t.
+            is_trans*(ys*torch.log(dydt)) + 
+            (1-is_trans)*ys*torch.log(dydg)
+            + (1-is_trans)*(1-ys)*torch.log(1-outputs) 
         )
         return -torch.mean(losses)
+    
+    def __call__(self, model, batch):
+        if self.g_res:
+            return self.loss(model, batch)
+        else:
+            raise NotImplementedError
+        
+
+class LossDyDgSumoFirstLast:
+    def __init__(self, t_res=None, g_res=1):
+        self.g_res = g_res
+        self.t_res = t_res
+    def loss(self, model, batch):
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
+        outputs = model(batch)
+        
+        greater_g = gs + self.g_res
+        batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight, is_trans)
+        outputs_greater_g  = model(batch_greater_g)
+        dydg = outputs - outputs_greater_g
+        dydg = torch.clamp(dydg, 1e-6, 1-1e-6)
+
+        t_before =  ts - self.t_res
+        t_before =  torch.clamp(t_before, 0, torch.inf)
+        batch_t_before = (subjects, Xs, gs, t_before, ys, weight, is_trans)
+        outputs_t_before = model(batch_t_before)
+        dydt = outputs - outputs_t_before
+        dydt = torch.clamp(dydt, 1e-6, 1-1e-6)
+
+        outputs_greater_g = torch.clamp(outputs_greater_g, 1e-6, 1-1e-6)
+        outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
+        losses_at_trans = is_trans*(
+            ys*(torch.log(dydt))# + torch.log(dydg))
+        )
+        losses_off_trans = (1-is_trans)*(ys)*torch.log(dydg) + 2*(1-is_trans)*(1-ys)*torch.log(1-outputs)
+        return -torch.mean(weight*(losses_at_trans + losses_off_trans))
     
     def __call__(self, model, batch):
         if self.g_res:
@@ -269,7 +359,7 @@ class LitModelSurvSurf(LitModel):
         self.weight_decay = weight_decay
         self.eval_fn = LossBrierSimple()
     def forward(self,batch):
-        subjects, Xs, gs, ts, ys, weight = batch
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
         return self.model(ts, gs, Xs)
     
     def configure_optimizers(self):
@@ -283,21 +373,20 @@ class LitModelSurvSurf(LitModel):
     
     def validation_step(self, batch, batch_idx, dataloader_idx): #batch_idx is a compulsory argument:
         
-        with torch.set_grad_enabled(True):
-            if dataloader_idx == 0:
-                # Compute the loss
-                loss = self.loss_fn(self, batch)
-                eval_res = dict()
-                eval_res['loss'] = loss.detach()
-                eval_res['batch_size'] = batch[-1].shape[0]
-                self.validation_loss.append(eval_res)
-            if dataloader_idx == 1:
-                # Compute the loss
-                loss = self.eval_fn(self, batch)
-                eval_res = dict()
-                eval_res['brier_on_probs'] = loss.detach()
-                eval_res['batch_size'] = batch[-1].shape[0]
-                self.validation_brier_on_probs.append(eval_res)
+        if dataloader_idx == 0:
+            # Compute the loss
+            loss = self.loss_fn(self, batch)
+            eval_res = dict()
+            eval_res['loss'] = loss.detach()
+            eval_res['batch_size'] = batch[-1].shape[0]
+            self.validation_loss.append(eval_res)
+        if dataloader_idx == 1:
+            # Compute the loss
+            loss = self.eval_fn(self, batch)
+            eval_res = dict()
+            eval_res['brier_on_probs'] = loss.detach()
+            eval_res['batch_size'] = batch[-1].shape[0]
+            self.validation_brier_on_probs.append(eval_res)
 
     def on_validation_epoch_end(self):        
         N = sum(output['batch_size'] for output in self.validation_loss)

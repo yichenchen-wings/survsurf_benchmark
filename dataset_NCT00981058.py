@@ -15,6 +15,7 @@ ds_name_to_n_feats_mapping = {
 COLNAME_SURVIVAL_DURATION = "duration"
 COLNAME_SURVIVAL_EVENT_OBSERVED ="event_observed"
 COL_WEIGHT = 'weight'
+COL_IS_TRANS = 'is_t_trans'
 
 
 class DatasetNCT00981058(Dataset):
@@ -24,10 +25,10 @@ class DatasetNCT00981058(Dataset):
             ds_name, 
             g_resol, 
             split: Literal['train', 'tune', 'val', 'test'], 
-            mode:Literal['first_cross_obs_only', 'full_traj_obs_only', 'multi_t', 'true_probs_grid'],
+            mode:Literal['first_cross_obs_only', 'first_last_obs_per_g', 'full_traj_obs_only', 'multi_t', 'true_probs_grid','true_probs_grid_naless'],
             separate_g_from_feats: bool,
             t_resol=1,
-            g_max=5
+            g_max=5,
         ):
         self.split = split
         self.mode = mode
@@ -42,18 +43,18 @@ class DatasetNCT00981058(Dataset):
         self.colname_g = 'g_max_by_time'
         self.g_max = g_max
         
-        self.subjects, self.X, self.g, self.t, self.y, self.weight= self._get_df_Xy()
+        self.subjects, self.X, self.g, self.t, self.y, self.weight, self.is_trans= self._get_df_Xy()
 
     def __len__(self):
         return self.y.shape[0]
 
     def __getitem__(self, index):
         if self.separate_g_from_feats:
-            return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index], self.weight[index]
+            return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
         else:
-            return self.subjects[index], self.X[index], self.t[index], self.y[index], self.weight[index]
+            return self.subjects[index], self.X[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
 
-    def _single_traj_to_trans_time(self, df_single_traj):
+    def _single_traj_to_trans_time(self, df_single_traj, higher_grade_censored=True):
         traj = pd.Series(
             df_single_traj[self.colname_g].values,
             index=df_single_traj[self.colname_time].values
@@ -73,19 +74,20 @@ class DatasetNCT00981058(Dataset):
                 trans_to = traj[time]
                 rows_event_df.append(
                     {
-                        COLNAME_SURVIVAL_EVENT_OBSERVED:True,
+                        COLNAME_SURVIVAL_EVENT_OBSERVED:1,
                         COLNAME_SURVIVAL_DURATION:time,
                         self.colname_g:trans_to
                     }
                 )
         # at the latest obs, the more severe states 'have not yet been observed'
-        rows_event_df.append(
-            {
-                COLNAME_SURVIVAL_EVENT_OBSERVED:False,
-                COLNAME_SURVIVAL_DURATION:time,
-                self.colname_g: max_trans_to + self.g_resol 
-            }
-        )
+        if higher_grade_censored:
+            rows_event_df.append(
+                {
+                    COLNAME_SURVIVAL_EVENT_OBSERVED:0,
+                    COLNAME_SURVIVAL_DURATION:time,
+                    self.colname_g: max_trans_to + self.g_resol 
+                }
+            )
         return pd.DataFrame(rows_event_df)
     
     def _get_df_Xy_trans_obs(self):
@@ -103,14 +105,75 @@ class DatasetNCT00981058(Dataset):
         df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
         df_xy = df_xy.reset_index(drop=True)
         df_xy[COL_WEIGHT] = 1
-        return df_xy    
+        df_xy[COL_IS_TRANS] = 1
+        return df_xy 
+
+    def _last_obs_each_g_in_traj(self, df_single_traj):
+        rows = []
+        for g, df in df_single_traj.groupby(self.colname_g):
+            if g > 0:
+                if df.shape[0] >= 1:
+                    rows.append(
+                        {
+                            COLNAME_SURVIVAL_EVENT_OBSERVED:1,
+                            COLNAME_SURVIVAL_DURATION:df[self.colname_time].max(),
+                            self.colname_g: g
+                        }
+                    )
+            else:
+                rows.append(
+                    {
+                        COLNAME_SURVIVAL_EVENT_OBSERVED:0,
+                        COLNAME_SURVIVAL_DURATION:df[self.colname_time].max(),
+                        self.colname_g: self.g_resol
+                    }
+                )
+        
+        return pd.DataFrame(rows)
+        
+    def _get_df_Xy_first_last_obs_per_g(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        max_g_by_t_obs = pd.read_csv(self.path_max_g_by_t_obs, index_col=0)
+        assert self.colname_traj_id in max_g_by_t_obs.columns
+        
+        df_trans_time = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
+            lambda x: self._single_traj_to_trans_time(x, higher_grade_censored=False)
+        ).reset_index(level=0)
+        df_trans_time[COL_IS_TRANS] = 1
+
+        df_last_obs = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
+            self._last_obs_each_g_in_traj
+        ).reset_index(level=0)
+        df_last_obs[COL_IS_TRANS] = 0
+
+        df_first_last_obs = pd.concat([df_trans_time, df_last_obs])
+        df_xy = df_first_last_obs.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
+        df_xy = df_xy.reset_index(drop=True)
+        n_steps_per_traj = df_xy.groupby(self.colname_traj_id).apply(lambda df: (1-df[COL_IS_TRANS]).sum())
+        weight = n_steps_per_traj.mean()/n_steps_per_traj
+
+        df_xy[COL_WEIGHT] = df_xy[self.colname_traj_id].map(weight.to_dict())
+        return df_xy
 
     def _single_traj_full_to_label(self, df_single_traj):
         rows_event_df = pd.DataFrame()
         rows_event_df[COLNAME_SURVIVAL_DURATION] = df_single_traj[self.colname_time].values
-        rows_event_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = True
+        rows_event_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = 1
         rows_event_df[self.colname_g] = df_single_traj[self.colname_g].values        
         return rows_event_df
+    
+    def _single_traj_g_label_trans(self, df_single_traj_g):
+        out = df_single_traj_g.copy()
+        selector = df_single_traj_g[COLNAME_SURVIVAL_EVENT_OBSERVED].astype(bool)
+        t_min = df_single_traj_g.loc[selector, COLNAME_SURVIVAL_DURATION].min()
+        selector_trans = selector & (df_single_traj_g[COLNAME_SURVIVAL_DURATION] == t_min)
+        out.loc[selector_trans, COL_IS_TRANS] = 1
+        out.loc[~selector_trans, COL_IS_TRANS] = 0
+        return out
     
     def _get_df_Xy_full_traj_obs(self, g0_as_gres=True):
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
@@ -123,12 +186,15 @@ class DatasetNCT00981058(Dataset):
         df_trans_time = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
             self._single_traj_full_to_label
         ).reset_index(level=0)
+        df_trans_time = df_trans_time.groupby([self.colname_traj_id, self.colname_g]).apply(
+            self._single_traj_g_label_trans
+        ).reset_index(drop=True)
 
         if g0_as_gres:
             df_trans_time.loc[
                 df_trans_time[self.colname_g] == 0,
                 COLNAME_SURVIVAL_EVENT_OBSERVED
-            ]  = False
+            ]  = 0
             
             df_trans_time.loc[ 
                 df_trans_time[self.colname_g] == 0,
@@ -139,7 +205,6 @@ class DatasetNCT00981058(Dataset):
             df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
         else:
             df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
-            
         df_xy = df_xy.reset_index(drop=True)
         df_xy[COL_WEIGHT] = 1
         return df_xy
@@ -202,6 +267,7 @@ class DatasetNCT00981058(Dataset):
         ).reset_index(level=[0,1])
         df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
+        df_xy[COL_IS_TRANS] = np.nan
         return df_xy 
      
     def _single_subj_to_tg_grid(self, obs_full_traj_subj, t_min, t_max):
@@ -272,7 +338,7 @@ class DatasetNCT00981058(Dataset):
             rows.append(df)
         return pd.concat(rows)
     
-    def _get_df_Xy_true_prob(self):
+    def _get_df_Xy_true_prob(self, dropna=False):
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -289,17 +355,25 @@ class DatasetNCT00981058(Dataset):
         ).apply(
             lambda df: self._single_subj_to_tg_grid(df, t_min, t_max)
         ).reset_index(level=[0])
+        
+        if dropna:
+            df_tg_grid = df_tg_grid.dropna()
         df_xy = df_tg_grid.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
+        df_xy[COL_IS_TRANS] = np.nan
         return df_xy
 
     def _get_df_Xy(self):
         if self.mode == 'first_cross_obs_only':
             df_Xy = self._get_df_Xy_trans_obs()
+        elif self.mode == 'first_last_obs_per_g':
+            df_Xy = self._get_df_Xy_first_last_obs_per_g()
         elif self.mode == 'full_traj_obs_only':
             df_Xy = self._get_df_Xy_full_traj_obs()
         elif self.mode == 'true_probs_grid':
             df_Xy = self._get_df_Xy_true_prob()
+        elif self.mode == 'true_probs_grid_naless':
+            df_Xy = self._get_df_Xy_true_prob(dropna=True)
         elif self.mode == 'multi_t':
             df_Xy = self._get_df_Xy_multi_t()
         else:
@@ -313,7 +387,8 @@ class DatasetNCT00981058(Dataset):
             t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values, dtype=torch.float32)
             y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values, dtype=torch.float32)
             weight = torch.tensor(df_Xy[[COL_WEIGHT]].values, dtype=torch.float32)
-            return subjects, X,g,t,y, weight
+            is_trans = torch.tensor(df_Xy[[COL_IS_TRANS]].values, dtype=torch.float32)
+            return subjects, X,g,t,y, weight, is_trans
         
         else:
             subjects = df_Xy[self.colname_traj_id]
@@ -323,7 +398,8 @@ class DatasetNCT00981058(Dataset):
             t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values, dtype=torch.float32)
             y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values, dtype=torch.float32)
             weight = torch.tensor(df_Xy[[COL_WEIGHT]].values, dtype=torch.float32)
-            return subjects,X,g,t,y, weight
+            is_trans = torch.tensor(df_Xy[[COL_IS_TRANS]].values, dtype=torch.float32)
+            return subjects,X,g,t,y, weight, is_trans
 
 class DataModuleNCT00981058(LightningDataModule):
     def __init__(
@@ -335,7 +411,7 @@ class DataModuleNCT00981058(LightningDataModule):
             batch_size, 
             num_workers,
             train_mode:Literal['first_cross_obs_only','full_traj_obs_only'],
-            eval_mode:Literal['first_cross_obs_only', 'true_probs_grid', 'multi_t'], 
+            eval_mode:Literal['first_cross_obs_only', 'true_probs_grid', 'multi_t','true_probs_grid_naless'], 
             t_resol=None,
             g_max=5
         ):
@@ -408,6 +484,34 @@ class DataModuleNCT00981058(LightningDataModule):
             self.ds_name, 
             self.g_resol, 
             split='test', 
+            mode=self.eval_mode, 
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol,
+            g_max=self.g_max
+        )
+
+        return [
+            DataLoader(as_obs, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
+            DataLoader(as_true_prob, batch_size=as_true_prob.__len__()//20, num_workers=self.num_workers, shuffle=False)
+        ]
+    
+    
+    def test_mode_train_dataloader(self):
+        as_obs = DatasetNCT00981058(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='train', 
+            mode=self.train_mode, 
+            separate_g_from_feats=self.separate_g_from_feats,
+            t_resol=self.t_resol,
+            g_max=self.g_max
+        )
+        as_true_prob = DatasetNCT00981058(
+            self.df_dir, 
+            self.ds_name, 
+            self.g_resol, 
+            split='train', 
             mode=self.eval_mode, 
             separate_g_from_feats=self.separate_g_from_feats,
             t_resol=self.t_resol,

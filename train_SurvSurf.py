@@ -96,6 +96,7 @@ for seed in SEEDS:
         t_max=run.config.t_max,
         n_hidden_layers=run.config.n_hidden_layers,
         n_hidden_dim=run.config.n_hidden_dim,
+        dropout=run.config.dropout
     )
 
     loss_fn_cls = model_factory_survsurf.__dict__[run.config.loss]

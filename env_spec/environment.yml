@@ -18,7 +18,7 @@ dependencies:
 # python packages
 - numpy
 - pandas
-- seaborn=0.13.0
+- seaborn
 - matplotlib
 - scikit-learn
 - tqdm 
@@ -26,10 +26,13 @@ dependencies:
 # pytorch
 - pytorch=*=*cuda*
 - pytorch::torchvision=0.16.0 
+#need to fixate this version, else could result in earlier version of torchvision and pytorch being installed
+# the earlier version resulted in extremely high cpu usage and slow run even after controlling
+# for number of threads and number of workers.
 
 # for general DNN training
 - conda-forge::lightning
 - conda-forge::ipywidgets
 - conda-forge::optuna
 
-- sebp::scikit-survival=0.22.2
+- sebp::scikit-survival

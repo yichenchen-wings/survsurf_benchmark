@@ -1,6 +1,7 @@
 
 from typing import Literal
 from lightning import LightningDataModule
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
@@ -11,12 +12,14 @@ ds_name_to_n_feats_mapping = {
     'markov_3feat11t5g_less_balanced':3,
     'markov_32feat_11t5g_more_balanced':32,
     'markov_32feat_11t5g_more_balanced_largeN':32,
+    'markov_32feat_11t5g_more_balanced_largeN_censor':32,
     'markov_32feat_11t5g_less_balanced':32
 }
 
 COLNAME_SURVIVAL_DURATION = "duration"
 COLNAME_SURVIVAL_EVENT_OBSERVED ="event_observed"
 COL_WEIGHT = 'weight'
+COL_IS_TRANS = 'is_t_trans'
 
 
 def _get_censor_status_for_g(df_max_g_by_t_subj, g):
@@ -38,8 +41,8 @@ def _get_censor_status_for_g(df_max_g_by_t_subj, g):
 
 
 
-def get_pre_censoring_t_train(df_dir, ds_name, gs):
-    path_max_g_by_t_obs = os.path.join(df_dir,f'{ds_name}__df_state_history_sampled_max_train.csv')
+def get_pre_censoring_t(df_dir, ds_name, gs, split: Literal['train', 'tune', 'val', 'test']):
+    path_max_g_by_t_obs = os.path.join(df_dir,f'{ds_name}__df_state_history_sampled_max_{split}.csv')
     df_max_g_by_t_obs = pd.read_csv(path_max_g_by_t_obs, index_col=0)
     df_out = []
     for g in gs:
@@ -56,10 +59,10 @@ class DatasetMarkovSurvSurf(Dataset):
             ds_name, 
             g_resol, 
             split: Literal['train', 'tune', 'val', 'test'], 
-            mode:Literal['first_cross_obs_only', 'full_traj_obs_only', 'true_probs_grid'],
+            mode:Literal['first_cross_obs_only', 'first_last_obs_per_g', 'full_traj_obs_only', 'true_probs_grid'],
             separate_g_from_feats: bool,
             t_resol=1,
-            g_max=5
+            g_max=5,
         ):
         assert t_resol == 1
         self.split = split
@@ -74,18 +77,18 @@ class DatasetMarkovSurvSurf(Dataset):
         self.colname_g = 'g_max_by_time'
         self.g_max = g_max
 
-        self.subjects, self.X, self.g, self.t, self.y, self.weight= self._get_df_Xy()
+        self.subjects, self.X, self.g, self.t, self.y, self.weight, self.is_trans = self._get_df_Xy()
 
     def __len__(self):
         return self.y.shape[0]
 
     def __getitem__(self, index):
         if self.separate_g_from_feats:
-            return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index], self.weight[index]
+            return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
         else:
-            return self.subjects[index], self.X[index], self.t[index], self.y[index], self.weight[index]
+            return self.subjects[index], self.X[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
 
-    def _single_traj_to_trans_time(self, df_single_traj):
+    def _single_traj_to_trans_time(self, df_single_traj, higher_grade_censored=True):
         traj = pd.Series(
             df_single_traj[self.colname_g].values,
             index=df_single_traj[self.colname_time].values
@@ -105,19 +108,20 @@ class DatasetMarkovSurvSurf(Dataset):
                 trans_to = traj[time]
                 rows_event_df.append(
                     {
-                        COLNAME_SURVIVAL_EVENT_OBSERVED:True,
+                        COLNAME_SURVIVAL_EVENT_OBSERVED:1,
                         COLNAME_SURVIVAL_DURATION:time,
                         self.colname_g:trans_to
                     }
                 )
         # at the latest obs, the more severe states 'have not yet been observed'
-        rows_event_df.append(
-            {
-                COLNAME_SURVIVAL_EVENT_OBSERVED:False,
-                COLNAME_SURVIVAL_DURATION:time,
-                self.colname_g: max_trans_to + self.g_resol 
-            }
-        )
+        if higher_grade_censored:
+            rows_event_df.append(
+                {
+                    COLNAME_SURVIVAL_EVENT_OBSERVED:0,
+                    COLNAME_SURVIVAL_DURATION:time,
+                    self.colname_g: max_trans_to + self.g_resol 
+                }
+            )
         return pd.DataFrame(rows_event_df)
     
     def _get_df_Xy_trans_obs(self):
@@ -135,14 +139,66 @@ class DatasetMarkovSurvSurf(Dataset):
         df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
         df_xy = df_xy.reset_index(drop=True)
         df_xy[COL_WEIGHT] = 1
+        df_xy[COL_IS_TRANS] = 1
         return df_xy    
+
+    def _last_obs_each_g_in_traj(self, df_single_traj):
+        rows = []
+        for g, df in df_single_traj.groupby(self.colname_g):
+            if g > 0:
+                if df.shape[0] >= 1:
+                    rows.append(
+                        {
+                            COLNAME_SURVIVAL_EVENT_OBSERVED:1,
+                            COLNAME_SURVIVAL_DURATION:df[self.colname_time].max(),
+                            self.colname_g: g
+                        }
+                    )
+            else:
+                rows.append(
+                    {
+                        COLNAME_SURVIVAL_EVENT_OBSERVED:0,
+                        COLNAME_SURVIVAL_DURATION:df[self.colname_time].max(),
+                        self.colname_g: self.g_resol
+                    }
+                )
+        
+        return pd.DataFrame(rows)
+        
+    def _get_df_Xy_first_last_obs_per_g(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        max_g_by_t_obs = pd.read_csv(self.path_max_g_by_t_obs, index_col=0)
+        assert self.colname_traj_id in max_g_by_t_obs.columns
+        
+        df_trans_time = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
+            lambda x: self._single_traj_to_trans_time(x, higher_grade_censored=False)
+        ).reset_index(level=0)
+        df_trans_time[COL_IS_TRANS] = 1
+
+        df_last_obs = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
+            self._last_obs_each_g_in_traj
+        ).reset_index(level=0)
+        df_last_obs[COL_IS_TRANS] = 0
+
+        df_first_last_obs = pd.concat([df_trans_time, df_last_obs])
+        df_xy = df_first_last_obs.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
+        df_xy = df_xy.reset_index(drop=True)
+
+        n_steps_per_traj = df_xy.groupby(self.colname_traj_id).apply(lambda df: (1-df[COL_IS_TRANS]).sum())
+        weight = n_steps_per_traj.mean()/n_steps_per_traj
+
+        df_xy[COL_WEIGHT] = df_xy[self.colname_traj_id].map(weight.to_dict())
+        return df_xy
 
     def _single_traj_full_to_label(self, df_single_traj):
         rows_event_df = pd.DataFrame()
         rows_event_df[COLNAME_SURVIVAL_DURATION] = df_single_traj[self.colname_time].values
         rows_event_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = True
         rows_event_df[self.colname_g] = df_single_traj[self.colname_g].values
-        
         return rows_event_df
     
     def _get_df_Xy_full_traj_obs(self, g0_as_gres=True):
@@ -174,6 +230,7 @@ class DatasetMarkovSurvSurf(Dataset):
             df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
         df_xy[COL_WEIGHT] = 1
+        df_xy[COL_IS_TRANS] = np.nan
         return df_xy
     
     def _get_df_Xy_true_prob(self):
@@ -195,12 +252,15 @@ class DatasetMarkovSurvSurf(Dataset):
         df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
         df_xy = df_xy.reset_index(drop=True)
         df_xy[COL_WEIGHT] = 1
+        df_xy[COL_IS_TRANS] = np.nan
         return df_xy
     
 
     def _get_df_Xy(self):
         if self.mode == 'first_cross_obs_only':
             df_Xy = self._get_df_Xy_trans_obs()
+        elif self.mode == 'first_last_obs_per_g':
+            df_Xy = self._get_df_Xy_first_last_obs_per_g()
         elif self.mode == 'full_traj_obs_only':
             df_Xy = self._get_df_Xy_full_traj_obs()
         elif self.mode == 'true_probs_grid':
@@ -216,7 +276,8 @@ class DatasetMarkovSurvSurf(Dataset):
             t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values, dtype=torch.float32)
             y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values, dtype=torch.float32)
             weight = torch.tensor(df_Xy[[COL_WEIGHT]].values, dtype=torch.float32)
-            return subjects, X,g,t,y, weight
+            is_trans = torch.tensor(df_Xy[[COL_IS_TRANS]].values, dtype=torch.float32)
+            return subjects, X,g,t,y, weight, is_trans
         
         else:
             subjects = df_Xy[self.colname_traj_id]
@@ -226,7 +287,8 @@ class DatasetMarkovSurvSurf(Dataset):
             t = torch.tensor(df_Xy[[COLNAME_SURVIVAL_DURATION]].values, dtype=torch.float32)
             y = torch.tensor(df_Xy[[COLNAME_SURVIVAL_EVENT_OBSERVED]].values, dtype=torch.float32)
             weight = torch.tensor(df_Xy[[COL_WEIGHT]].values, dtype=torch.float32)
-            return subjects,X,g,t,y, weight
+            is_trans = torch.tensor(df_Xy[[COL_IS_TRANS]].values, dtype=torch.float32)
+            return subjects,X,g,t,y, weight, is_trans
 
 class DataModuleMarkovSurvSurf(LightningDataModule):
     def __init__(
@@ -237,7 +299,7 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             separate_g_from_feats, 
             batch_size, 
             num_workers,
-            train_mode:Literal['first_cross_obs_only','full_traj_obs_only'],
+            train_mode:Literal['first_cross_obs_only','full_traj_obs_only','first_last_obs_per_g'],
             eval_mode:Literal['first_cross_obs_only', 'true_probs_grid'], 
             t_resol=None,
             g_max=5
