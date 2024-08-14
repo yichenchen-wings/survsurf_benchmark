@@ -19,7 +19,7 @@
     "weight_decay":5e-2,
     "device":"cpu",
     "save_top_k":1,
-    "t_max":11,
+    "t_max":13,
     "t_res_in_loss":1,
     "t_res_at_trans":1,
     "watch_model":false

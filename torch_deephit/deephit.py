@@ -163,7 +163,6 @@ class DeepHit(nn.Module):
         out = self._apply_blocks_cause_spcfc(out)
         out = self._apply_head(out)
         out = out.reshape(bs, self.k_compete_events, self.t_size)
-        out = out/out.sum(dim=-1).reshape(bs, self.k_compete_events, 1)
         return out
     
     def forward_cif(self, x):
