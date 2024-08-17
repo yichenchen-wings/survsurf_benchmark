@@ -10,6 +10,7 @@ import os
 
 ds_name_to_n_feats_mapping = {
     'real_NCT00981058':51,
+    'real_NCT00981058_inject':52,
 }
 
 COLNAME_SURVIVAL_DURATION = "duration"
