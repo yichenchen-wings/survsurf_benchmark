@@ -50,6 +50,8 @@ def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade'
         df_val_survival = df_val_survival.loc[subj_g_common,:]
         df_val_estimate_pivot = df_val_estimate_pivot.loc[subj_g_common,:]
 
+        assert all(np.diff(df_val_estimate_pivot.columns.values) > 0)
+
         assert all(df_val_estimate_pivot.index.values == df_val_survival.index.values)
         df_val_survival = df_val_survival.reset_index(drop=False)
 
@@ -143,9 +145,7 @@ def _all_grades_start_end_time_subj(obs_full_traj_subj, gs):
     return pd.DataFrame(rows)
     
 def get_all_grades_start_end_time(obs_full_traj, gs):
-    g_max = obs_full_traj['g_max_by_time'].max()
     assert all([g > 0 for g in gs])
-    assert all([g <= g_max for g in gs])
     out = obs_full_traj.groupby('subject').apply(
         lambda df: _all_grades_start_end_time_subj(df, gs)
     ).reset_index(level=[0])
@@ -202,7 +202,7 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
     for i, t in enumerate(times):
         est = estimate[:, i]
         is_case = (test_time_happened <= t) & test_event 
-        is_control_exact_t = (test_time_happened > t) & ~missing_exact_t
+        is_control_exact_t = (test_time_happened >= t) & ~test_event
         is_control_inexact_t = (test_time_alive >= t) & missing_exact_t
         is_control = is_control_exact_t | is_control_inexact_t
         if ipcw:
@@ -224,6 +224,7 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
 def get_integrated_brier_intrvl_imputed(obs_trans_time_all_g, out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj','without_ipcw'], max_grade=5, max_time=None):
     int_brier_all_grades = []
     for g, obs_all_t_all_sbj in out_model['true_prob'].groupby('g'):
+        if g > max_grade: continue
         survival_test_all_subj = obs_trans_time_all_g.loc[obs_trans_time_all_g['g'] == g,:]
         estimate_all_subj = obs_all_t_all_sbj.pivot(index='subj', columns='t', values='pred')
         assert set(estimate_all_subj.index) == set(survival_test_all_subj['subject'])
@@ -238,6 +239,7 @@ def get_integrated_brier_intrvl_imputed(obs_trans_time_all_g, out_model, df_last
         else:
             t_max = min(t_max_test, max_time)
         times = estimate_all_subj.columns[(estimate_all_subj.columns >= t_min) & (estimate_all_subj.columns < t_max)]
+        assert all(np.diff(times) > 0)
         estimate_all_subj=1-estimate_all_subj
         
         if ipcw == 'by_grade':
@@ -298,7 +300,7 @@ def mse_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_al
         est = estimate[:, i]
         truth_t = truth[:, i]
         is_case = (test_time_happened <= t) & test_event 
-        is_control_exact_t = (test_time_happened > t) & ~missing_exact_t
+        is_control_exact_t = (test_time_happened >= t) & ~test_event
         is_control_inexact_t = (test_time_alive >= t) & missing_exact_t
         is_control = is_control_exact_t | is_control_inexact_t
         is_certain_obs = is_control|is_case
@@ -319,6 +321,7 @@ def mse_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_al
 def get_mse_vs_theory_certain_obs(obs_trans_time_all_g, out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj','without_ipcw'], max_grade=5, max_time=None):
     int_mse_all_grades = []
     for g, obs_all_t_all_sbj in out_model['true_prob'].groupby('g'):
+        if g > max_grade: continue
         survival_test_all_subj = obs_trans_time_all_g.loc[obs_trans_time_all_g['g'] == g,:]
         estimate_all_subj = obs_all_t_all_sbj.pivot(index='subj', columns='t', values='pred')
         theory_all_subj = obs_all_t_all_sbj.pivot(index='subj', columns='t', values='truth')
@@ -336,6 +339,7 @@ def get_mse_vs_theory_certain_obs(obs_trans_time_all_g, out_model, df_last_obs_t
         else:
             t_max = min(t_max_test, max_time)
         times = estimate_all_subj.columns[(estimate_all_subj.columns >= t_min) & (estimate_all_subj.columns < t_max)]
+        assert all(np.diff(times) > 0)
 
         if ipcw == 'by_grade':
             df_last_obs_time_train_sub = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, ['event_observed', 'duration']].copy()
@@ -367,7 +371,55 @@ def get_mse_vs_theory_certain_obs(obs_trans_time_all_g, out_model, df_last_obs_t
 
 
 
-def get_mse_vs_theory(out_model):
+def get_mse_vs_theory(out_model, t_max=None, g_max=None):
+
     df = out_model['true_prob']
+
+    if t_max:
+        df = df.loc[df['t'] <= t_max, :]
+    if g_max:
+        df = df.loc[df['g'] <= g_max, :]
     mse = np.square(df['truth'] - df['pred']).mean()
     return mse
+
+
+def get_kl_div_vs_theory(out_model, t_max=None, g_max=None):
+    
+    df_in_range = out_model['true_prob'].copy()
+
+    if t_max:
+        df_in_range = df_in_range.loc[df_in_range['t'] <= t_max, :]
+    if g_max:
+        df_in_range = df_in_range.loc[df_in_range['g'] <= g_max, :]
+    kl_div_all_g_all_sub = []
+    for (g, subj), obs_all_t_one_sbj in df_in_range.groupby(['g', 'subj']):
+        df_asc_t = obs_all_t_one_sbj.sort_values('t')
+        df_asc_t['pred'] = df_asc_t['pred'].diff()
+        df_asc_t['truth'] = df_asc_t['truth'].diff()
+        df_asc_t = df_asc_t.iloc[1::,:]
+        thresh = 1e-6
+        selector = df_asc_t['truth'] < thresh
+        df_asc_t.loc[selector, 'truth'] = thresh
+        selector = df_asc_t['pred'] < thresh
+        df_asc_t.loc[selector, 'pred'] = thresh
+        kl_div_ts = df_asc_t['pred']*np.log(df_asc_t['pred']/df_asc_t['truth'])
+        kl_div_normed = np.trapz(x=df_asc_t['t'], y=kl_div_ts)/np.ptp(df_asc_t['t'])
+        kl_div_all_g_all_sub.append(kl_div_normed)
+    kl_div = np.mean(kl_div_all_g_all_sub)
+    return kl_div
+
+
+def get_ks_stats(out_model, t_max=None, g_max=None):
+    
+    df_in_range = out_model['true_prob'].copy()
+
+    if t_max:
+        df_in_range = df_in_range.loc[df_in_range['t'] <= t_max, :]
+    if g_max:
+        df_in_range = df_in_range.loc[df_in_range['g'] <= g_max, :]
+    ks_all_g_all_sub = []
+    for subj, obs_all_t_one_sbj in df_in_range.groupby(['subj']):
+        ks = max((obs_all_t_one_sbj['pred'] - obs_all_t_one_sbj['truth']).abs())
+        ks_all_g_all_sub.append(ks)
+    ks_all_g_all_sub = np.mean(ks_all_g_all_sub)
+    return ks_all_g_all_sub

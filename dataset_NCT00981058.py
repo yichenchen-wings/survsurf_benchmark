@@ -113,7 +113,7 @@ class DatasetNCT00981058(Dataset):
         rows = []
         for g, df in df_single_traj.groupby(self.colname_g):
             if g > 0:
-                if df.shape[0] >= 1:
+                if df.shape[0] > 1:
                     rows.append(
                         {
                             COLNAME_SURVIVAL_EVENT_OBSERVED:1,
@@ -144,22 +144,24 @@ class DatasetNCT00981058(Dataset):
             lambda x: self._single_traj_to_trans_time(x, higher_grade_censored=False)
         ).reset_index(level=0)
         df_trans_time[COL_IS_TRANS] = 1
+        df_trans_time[COL_WEIGHT] = 1
 
         df_last_obs = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
             self._last_obs_each_g_in_traj
         ).reset_index(level=0)
         df_last_obs[COL_IS_TRANS] = 0
+        df_last_obs[COL_WEIGHT] = 1
 
         df_first_last_obs = pd.concat([df_trans_time, df_last_obs])
         df_xy = df_first_last_obs.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
         df_xy = df_xy.reset_index(drop=True)
-        n_steps_per_traj = df_xy.groupby(self.colname_traj_id).apply(lambda df: (1-df[COL_IS_TRANS]).sum())
+        n_steps_per_traj = df_xy.groupby(self.colname_traj_id)[self.colname_g].nunique()
         weight = n_steps_per_traj.mean()/n_steps_per_traj
 
-        df_xy[COL_WEIGHT] = df_xy[self.colname_traj_id].map(weight.to_dict())
+        df_xy[COL_WEIGHT] = df_xy[COL_WEIGHT]*df_xy[self.colname_traj_id].map(weight.to_dict())
         return df_xy
-
+    
     def _single_traj_full_to_label(self, df_single_traj):
         rows_event_df = pd.DataFrame()
         rows_event_df[COLNAME_SURVIVAL_DURATION] = df_single_traj[self.colname_time].values
@@ -208,6 +210,7 @@ class DatasetNCT00981058(Dataset):
             df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.reset_index(drop=True)
         df_xy[COL_WEIGHT] = 1
+        
         return df_xy
     
     def _single_event_to_5_times(self, single_event, t_max):

@@ -293,14 +293,16 @@ class LossDyDgSumo:
         outputs_t_before = model(batch_t_before)
         dydt = outputs - outputs_t_before
         dydt = torch.clamp(dydt, 1e-6, 1-1e-6)
-
+        
+        special_d = outputs - (outputs_greater_g + outputs_t_before)/2
+        special_d = torch.clamp(special_d, 1e-6, 1-1e-6)
         outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
         losses = (
-            is_trans*(ys*torch.log(dydt)) + 
+            is_trans*(ys*torch.log(special_d)) + 
             (1-is_trans)*ys*torch.log(dydg)
             + (1-is_trans)*(1-ys)*torch.log(1-outputs) 
         )
-        return -torch.mean(losses)
+        return -torch.mean(weight*losses)
     
     def __call__(self, model, batch):
         if self.g_res:
@@ -330,12 +332,13 @@ class LossDyDgSumoFirstLast:
         dydt = outputs - outputs_t_before
         dydt = torch.clamp(dydt, 1e-6, 1-1e-6)
 
+        special_d = outputs - (outputs_greater_g + outputs_t_before)/2
+        special_d = torch.clamp(special_d, 1e-6, 1-1e-6)
         outputs_greater_g = torch.clamp(outputs_greater_g, 1e-6, 1-1e-6)
         outputs = torch.clamp(outputs, 1e-6, 1-1e-6)
-        losses_at_trans = is_trans*(
-            ys*(torch.log(dydt))# + torch.log(dydg))
-        )
-        losses_off_trans = (1-is_trans)*(ys)*torch.log(dydg) + 2*(1-is_trans)*(1-ys)*torch.log(1-outputs)
+
+        losses_at_trans = is_trans*ys*(torch.log(special_d))
+        losses_off_trans = (1-is_trans)*(ys)*(torch.log(dydg)) + (1-is_trans)*(1-ys)*(torch.log(1-outputs))
         return -torch.mean(weight*(losses_at_trans + losses_off_trans))
     
     def __call__(self, model, batch):
