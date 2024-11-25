@@ -16,8 +16,9 @@ dependencies:
 # Below are examples of project-specific python and R packages (including versions)
 
 # python packages
-- numpy
+- numpy < 2
 - pandas
+- pyshp
 - seaborn
 - matplotlib
 - scikit-learn

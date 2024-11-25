@@ -2,21 +2,65 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+COLNAME_SURVIVAL_DURATION = "duration"
+COLNAME_SURVIVAL_EVENT_OBSERVED ="event_observed"
+
+def _get_last_obs_time(df_max_g_by_t_subj, g):
+    g_max =  df_max_g_by_t_subj['g_max_by_time'].max()
+    seletor_max_g = df_max_g_by_t_subj['g_max_by_time'] == g_max
+    t_last_obs = df_max_g_by_t_subj.loc[seletor_max_g,'t'].max()
+    record = dict()
+    record['g'] = g
+    record[COLNAME_SURVIVAL_DURATION] = t_last_obs
+    record[COLNAME_SURVIVAL_EVENT_OBSERVED] = False 
+    return pd.Series(record)
+
+from sksurv.nonparametric import CensoringDistributionEstimator
+
+
 def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj'], max_grade=5, max_time=None):
     integrated_brier_events = []
     mean_auc_events = []
-    for g, out_model_obs_sub in out_model['obs'].groupby('g'):
+    out_model_obs = out_model['obs'].copy()
+    gs_all = out_model_obs['g'].unique()
+
+    def fill_in_higher_gs(df):
+        subj = df['subj'].iloc[0]
+        max_time = df['t'].max()
+        max_g = df['g'].max()
+        gs_higher = gs_all[gs_all > max_g]
+        if gs_higher.size:
+            gs_higher_df = pd.DataFrame(columns=df.columns)
+            gs_higher_df['g'] = gs_higher
+            gs_higher_df['t'] = max_time
+            gs_higher_df['truth'] = 0
+            gs_higher_df['subj'] = subj
+            return pd.concat([df, gs_higher_df])
+        else:
+            return df
+    out_model_obs = out_model_obs.groupby('subj').apply(fill_in_higher_gs).reset_index(drop=True)   
+
+    for g, out_model_obs_sub in out_model_obs.groupby('g'):
         if g > max_grade:
             continue
         if ipcw == 'by_grade':
-            df_train_obs_sub = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, ['event_observed', 'duration']].copy()
+            df_train_obs_sub = df_last_obs_time_train.loc[
+                df_last_obs_time_train['g'] == g, 
+                [COLNAME_SURVIVAL_EVENT_OBSERVED, COLNAME_SURVIVAL_DURATION]
+            ].copy()
         elif ipcw == 'by_subj':
-            df_train_obs_sub = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == max_grade, ['event_observed', 'duration']].copy()
+            df_train_obs_sub = df_last_obs_time_train.loc[
+                df_last_obs_time_train['g'] == max_grade, 
+                [COLNAME_SURVIVAL_EVENT_OBSERVED, COLNAME_SURVIVAL_DURATION]
+            ].copy()
         else:
             raise NotImplementedError
 
         if not max_time: 
-            max_surv_time_train = df_last_obs_time_train.loc[df_last_obs_time_train['event_observed'] & (df_last_obs_time_train['g'] == g), 'duration'].max()
+            max_surv_time_train = df_last_obs_time_train.loc[
+                df_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED] & (df_last_obs_time_train['g'] == g), 
+                COLNAME_SURVIVAL_DURATION
+            ].max()
         else:
             max_surv_time_train = max_time
         df_val_estimate = out_model_obs_sub[
@@ -28,7 +72,7 @@ def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade'
         )
 
         df_val_survival = df_val_estimate[['subj','g']].drop_duplicates().merge(
-            out_model['obs'], 
+            out_model_obs, 
             on=['subj', 'g'],
             how='left', 
         )
@@ -58,7 +102,9 @@ def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade'
         from sksurv.metrics import integrated_brier_score, cumulative_dynamic_auc
 
         survival_train = df_train_obs_sub.copy()
-        survival_train['event_observed'] = survival_train['event_observed'].astype(bool)
+        survival_train = survival_train.sort_values(COLNAME_SURVIVAL_DURATION)
+        survival_train[COLNAME_SURVIVAL_EVENT_OBSERVED].iloc[0] = 1 # otherwise CensoringDistributionEstimator in integrated_brier_score won't run
+        survival_train[COLNAME_SURVIVAL_EVENT_OBSERVED] = survival_train[COLNAME_SURVIVAL_EVENT_OBSERVED].astype(bool)
         survival_train = survival_train.to_records(index=False)
 
         survival_test = df_val_survival[['truth', 't']].copy()
@@ -74,19 +120,17 @@ def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade'
             estimate=df_val_estimate_pivot.values,
             times=df_val_estimate_pivot.columns.values
         )
-        # if df_trian_obs_sub['event_observed'].astype(bool).all():
-        #     mean_auc = np.nan
-        # else:
+
         auc, mean_auc = cumulative_dynamic_auc(
             survival_train=survival_train,
             survival_test=survival_test,
             estimate=1-df_val_estimate_pivot.values,
             times=df_val_estimate_pivot.columns.values
         )
+        mean_auc = np.nan
         integrated_brier_events.append(intrg_brier)
         mean_auc_events.append(mean_auc)
     return np.mean(integrated_brier_events), np.mean(mean_auc_events)
-
 
 
 def _all_grades_start_end_time_subj(obs_full_traj_subj, gs):
@@ -152,7 +196,6 @@ def get_all_grades_start_end_time(obs_full_traj, gs):
     return out
 
 
-from sksurv.nonparametric import CensoringDistributionEstimator
 
 from sksurv.metrics import _check_estimate_2d
 def _check_survival_all_subj(survival_test_all_subj):
@@ -186,8 +229,11 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
         estimate = estimate.reshape(-1, 1)
     if ipcw:
         # fit IPCW estimator
-        y = subj_last_obs_time_train[['event_observed','duration']].copy()
-        y['duration'] = y['duration'].astype(float)
+        subj_last_obs_time_train = subj_last_obs_time_train.sort_values(COLNAME_SURVIVAL_DURATION)
+        subj_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED].iloc[0] = True # otherwise CensoringDistributionEstimator in integrated_brier_score won't run
+        subj_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED] = subj_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED].astype(bool)
+        y = subj_last_obs_time_train[[COLNAME_SURVIVAL_EVENT_OBSERVED,COLNAME_SURVIVAL_DURATION]].copy()
+        y[COLNAME_SURVIVAL_DURATION] = y[COLNAME_SURVIVAL_DURATION].astype(float)
         y = y.to_records(index=False)
         cens = CensoringDistributionEstimator().fit(y)
         # calculate inverse probability of censoring weight at current time point t.
@@ -205,17 +251,15 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
         is_control_exact_t = (test_time_happened >= t) & ~test_event
         is_control_inexact_t = (test_time_alive >= t) & missing_exact_t
         is_control = is_control_exact_t | is_control_inexact_t
+        N_certain = is_control.sum() + is_case.sum() 
+
         if ipcw:
-            brier_scores[i] = np.mean(
-                np.square(est) * is_case.astype(int) / prob_cens_y
-                + np.square(1.0 - est) * is_control.astype(int) / prob_cens_t[i]
-            ) 
-            # what to do with interval censored data? the more interval-censored subjects, the smaller
-            # the resulting score will be, this is a source of bias (artefact).
+            sum_cases = (np.square(est) * is_case.astype(int) / prob_cens_y).sum()
+            sum_controls = (np.square(1.0 - est) * is_control.astype(int) / prob_cens_t[i]).sum()
+            brier_scores[i] = (sum_cases + sum_controls)/N_certain
         else:
             sum_cases = np.square(est)[is_case].sum()
             sum_controls = np.square(1.0 - est)[is_control].sum()
-            N_certain = is_control.sum() + is_case.sum() 
             brier_scores[i] = (sum_cases + sum_controls)/N_certain
 
     return times, brier_scores
@@ -223,6 +267,9 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
 
 def get_integrated_brier_intrvl_imputed(obs_trans_time_all_g, out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj','without_ipcw'], max_grade=5, max_time=None):
     int_brier_all_grades = []
+    out_model['true_prob']['g'] = out_model['true_prob']['g'].astype('float64').round(6)
+    obs_trans_time_all_g['g'] = obs_trans_time_all_g['g'].astype('float64').round(6)
+    df_last_obs_time_train['g'] = df_last_obs_time_train['g'].astype('float64').round(6)
     for g, obs_all_t_all_sbj in out_model['true_prob'].groupby('g'):
         if g > max_grade: continue
         survival_test_all_subj = obs_trans_time_all_g.loc[obs_trans_time_all_g['g'] == g,:]
@@ -283,8 +330,11 @@ def mse_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_al
     truth, times = _check_estimate_2d(truth_all_subj, test_time_happened, times, estimator="brier_score")
     if ipcw:
         # fit IPCW estimator
-        y = subj_last_obs_time_train[['event_observed','duration']].copy()
-        y['duration'] = y['duration'].astype(float)
+        subj_last_obs_time_train = subj_last_obs_time_train.sort_values(COLNAME_SURVIVAL_DURATION)
+        subj_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED].iloc[0] = True # otherwise CensoringDistributionEstimator in integrated_brier_score won't run
+        subj_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED] = subj_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED].astype(bool)
+        y = subj_last_obs_time_train[[COLNAME_SURVIVAL_EVENT_OBSERVED,COLNAME_SURVIVAL_DURATION]].copy()
+        y[COLNAME_SURVIVAL_DURATION] = y[COLNAME_SURVIVAL_DURATION].astype(float)
         y = y.to_records(index=False)
         cens = CensoringDistributionEstimator().fit(y)
         # calculate inverse probability of censoring weight at current time point t.
