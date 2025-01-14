@@ -2,7 +2,38 @@ import torch
 from monotonic_nn_surv_surf.core.survival_surface_nn import SurvivalSurface
 from monotonic_nn_surv_surf.core.monotonic_net import MonotonicNet
 from monotonic_nn_surv_surf.core.survsurf_2d_sigm import SurvSurf2DTaddTG, SurvSurf2DSigmJoLin
+from monotonic_nn_surv_surf.utils.surv_surf_latent import SurvSurfLatent, LatentFeatFC
 import numpy as np
+
+class SurvSurNormTGPrelim(SurvivalSurface):
+    def __init__(self, net, t_max):
+        super().__init__(net)
+        self.t_max = t_max
+    
+    def forward(self, ts, gs, xs=None):
+        return super().forward(ts/self.t_max, gs, xs)
+
+def get_SurvSurf_prelim(
+        n_input_feats_g_excl,
+        n_hidden_layers,
+        n_hidden_dim,
+        t_max,
+        dropout=0
+):
+    model = SurvSurfLatent(
+        mono_net_sizes=[n_hidden_dim] + [n_hidden_dim]*n_hidden_layers + [1],
+        latent_feat_transformer=LatentFeatFC(
+            input_size=n_input_feats_g_excl, 
+            output_size=n_hidden_dim, 
+            neurons_per_layer=(n_hidden_layers-1)*[n_hidden_dim],
+            dropout_p=dropout
+        ),
+    )
+
+    monotonic_net = MonotonicNet(latent_sizes=[n_input_feats_g_excl] + [n_hidden_dim]*n_hidden_layers + [1])
+    model = SurvSurNormTGPrelim(monotonic_net, t_max)
+    return model
+
 
 class SurvSurfNormTG(SurvivalSurface):
     def __init__(self, net, t_max):
@@ -76,6 +107,21 @@ def get_SurvSurf2DSigmJoLin(
         dropout=dropout
     )
     return model
+
+
+class LossBCEAllTG: # only use with the all-tg transform for input data
+    def __init__(self, t_res=None, g_res=None):
+        pass
+    def loss_bce(self, model, batch):
+        subjects, Xs, gs, ts, ys, weight, is_trans = batch
+        outputs = model(batch)
+        ys = ys.type(outputs.dtype)
+
+        loss = torch.nn.functional.binary_cross_entropy(outputs, ys, weight=weight)
+        return loss
+    
+    def __call__(self, model, batch):
+        return self.loss_bce(model, batch)
 
 
 class LossBrierSimple:
