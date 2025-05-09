@@ -6,13 +6,13 @@ COLNAME_SURVIVAL_DURATION = "duration"
 COLNAME_SURVIVAL_EVENT_OBSERVED ="event_observed"
 
 def _get_last_obs_time(df_max_g_by_t_subj, g):
-    g_max =  df_max_g_by_t_subj['g_max_by_time'].max()
-    seletor_max_g = df_max_g_by_t_subj['g_max_by_time'] == g_max
-    t_last_obs = df_max_g_by_t_subj.loc[seletor_max_g,'t'].max()
+    seletor_max_g = df_max_g_by_t_subj['g_max_by_time'] >= g
+    t_last_obs = df_max_g_by_t_subj['t'].max()
+    obs = seletor_max_g.any()
     record = dict()
     record['g'] = g
     record[COLNAME_SURVIVAL_DURATION] = t_last_obs
-    record[COLNAME_SURVIVAL_EVENT_OBSERVED] = False 
+    record[COLNAME_SURVIVAL_EVENT_OBSERVED] = obs 
     return pd.Series(record)
 
 from sksurv.nonparametric import CensoringDistributionEstimator
@@ -39,7 +39,7 @@ def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade'
         else:
             return df
     out_model_obs = out_model_obs.groupby('subj').apply(fill_in_higher_gs).reset_index(drop=True)   
-
+    max_grade_in_data = df_last_obs_time_train['g'].max()
     for g, out_model_obs_sub in out_model_obs.groupby('g'):
         if g > max_grade:
             continue
@@ -50,9 +50,10 @@ def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade'
             ].copy()
         elif ipcw == 'by_subj':
             df_train_obs_sub = df_last_obs_time_train.loc[
-                df_last_obs_time_train['g'] == max_grade, 
+                df_last_obs_time_train['g'] == max_grade_in_data, 
                 [COLNAME_SURVIVAL_EVENT_OBSERVED, COLNAME_SURVIVAL_DURATION]
             ].copy()
+            df_train_obs_sub[COLNAME_SURVIVAL_EVENT_OBSERVED] = False
         else:
             raise NotImplementedError
 
@@ -270,6 +271,7 @@ def get_integrated_brier_intrvl_imputed(obs_trans_time_all_g, out_model, df_last
     out_model['true_prob']['g'] = out_model['true_prob']['g'].astype('float64').round(6)
     obs_trans_time_all_g['g'] = obs_trans_time_all_g['g'].astype('float64').round(6)
     df_last_obs_time_train['g'] = df_last_obs_time_train['g'].astype('float64').round(6)
+    max_g_in_data = df_last_obs_time_train['g'].max()
     for g, obs_all_t_all_sbj in out_model['true_prob'].groupby('g'):
         if g > max_grade: continue
         survival_test_all_subj = obs_trans_time_all_g.loc[obs_trans_time_all_g['g'] == g,:]
@@ -280,26 +282,42 @@ def get_integrated_brier_intrvl_imputed(obs_trans_time_all_g, out_model, df_last
         t_min = survival_test_all_subj['t_observed_or_censored'].min()
         t_max_test = survival_test_all_subj['t_observed_or_censored'].max()
 
-        if not max_time:
-            t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, 'duration'].max()
-            t_max = min(t_max_train, t_max_test)
-        else:
-            t_max = min(t_max_test, max_time)
-        times = estimate_all_subj.columns[(estimate_all_subj.columns >= t_min) & (estimate_all_subj.columns < t_max)]
-        assert all(np.diff(times) > 0)
-        estimate_all_subj=1-estimate_all_subj
+        
         
         if ipcw == 'by_grade':
-            df_last_obs_time_train_sub = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, ['event_observed', 'duration']].copy()
+            df_last_obs_time_train_sub = df_last_obs_time_train.loc[
+                df_last_obs_time_train['g'] == g, ['event_observed', 'duration']
+            ].copy()
             ipcw_ = True
+            if not max_time:
+                t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, 'duration'].max()
+                t_max = min(t_max_train, t_max_test)
+            else:
+                t_max = min(t_max_test, max_time)
         elif ipcw == 'by_subj':
-            df_last_obs_time_train_sub = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == max_grade, ['event_observed', 'duration']].copy()
+            df_last_obs_time_train_sub = df_last_obs_time_train.loc[
+                df_last_obs_time_train['g'] == max_g_in_data, ['event_observed', 'duration']
+            ].copy()
+            df_last_obs_time_train_sub['event_observed'] = False
             ipcw_ = True
+            if not max_time:
+                t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == max_g_in_data, 'duration'].max()
+                t_max = min(t_max_train, t_max_test)
+            else:
+                t_max = min(t_max_test, max_time)
         elif ipcw == 'without_ipcw':
             df_last_obs_time_train_sub = df_last_obs_time_train
             ipcw_ = False
+            if not max_time:
+                t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == max_g_in_data, 'duration'].max()
+                t_max = min(t_max_train, t_max_test)
+            else:
+                t_max = min(t_max_test, max_time)
         else:
             raise NotImplementedError
+        times = estimate_all_subj.columns[(estimate_all_subj.columns >= t_min) & (estimate_all_subj.columns < t_max)]
+        assert all(np.diff(times) > 0)
+        estimate_all_subj=1-estimate_all_subj
         
         # try:
         t, brier = brier_score_at_g(
@@ -370,6 +388,7 @@ def mse_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_al
 
 def get_mse_vs_theory_certain_obs(obs_trans_time_all_g, out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj','without_ipcw'], max_grade=5, max_time=None):
     int_mse_all_grades = []
+    max_g_in_data = df_last_obs_time_train['g'].max()
     for g, obs_all_t_all_sbj in out_model['true_prob'].groupby('g'):
         if g > max_grade: continue
         survival_test_all_subj = obs_trans_time_all_g.loc[obs_trans_time_all_g['g'] == g,:]
@@ -382,26 +401,42 @@ def get_mse_vs_theory_certain_obs(obs_trans_time_all_g, out_model, df_last_obs_t
         theory_all_subj = theory_all_subj.loc[survival_test_all_subj['subject'].values,:]
         t_min = survival_test_all_subj['t_observed_or_censored'].min()
         t_max_test = survival_test_all_subj['t_observed_or_censored'].max()
-        
-        if not max_time:
-            t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, 'duration'].max()
-            t_max = min(t_max_train, t_max_test)
-        else:
-            t_max = min(t_max_test, max_time)
-        times = estimate_all_subj.columns[(estimate_all_subj.columns >= t_min) & (estimate_all_subj.columns < t_max)]
-        assert all(np.diff(times) > 0)
 
         if ipcw == 'by_grade':
-            df_last_obs_time_train_sub = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, ['event_observed', 'duration']].copy()
+            df_last_obs_time_train_sub = df_last_obs_time_train.loc[
+                df_last_obs_time_train['g'] == g, ['event_observed', 'duration']
+            ].copy()
             ipcw_ = True
+        
+            if not max_time:
+                t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == g, 'duration'].max()
+                t_max = min(t_max_train, t_max_test)
+            else:
+                t_max = min(t_max_test, max_time)
         elif ipcw == 'by_subj':
-            df_last_obs_time_train_sub = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == max_grade, ['event_observed', 'duration']].copy()
+            df_last_obs_time_train_sub = df_last_obs_time_train.loc[
+                df_last_obs_time_train['g'] == max_g_in_data, ['event_observed', 'duration']
+            ].copy()
+            df_last_obs_time_train_sub['event_observed'] = False
             ipcw_ = True
+            if not max_time:
+                t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == max_g_in_data, 'duration'].max()
+                t_max = min(t_max_train, t_max_test)
+            else:
+                t_max = min(t_max_test, max_time)
         elif ipcw == 'without_ipcw':
             df_last_obs_time_train_sub = df_last_obs_time_train
             ipcw_ = False
+            if not max_time:
+                t_max_train = df_last_obs_time_train.loc[df_last_obs_time_train['g'] == max_g_in_data, 'duration'].max()
+                t_max = min(t_max_train, t_max_test)
+            else:
+                t_max = min(t_max_test, max_time)
         else:
             raise NotImplementedError
+        
+        times = estimate_all_subj.columns[(estimate_all_subj.columns >= t_min) & (estimate_all_subj.columns < t_max)]
+        assert all(np.diff(times) > 0)
         # try:
         t, mse = mse_score_at_g(
             subj_last_obs_time_train=df_last_obs_time_train_sub,
@@ -430,6 +465,18 @@ def get_mse_vs_theory(out_model, t_max=None, g_max=None):
     if g_max:
         df = df.loc[df['g'] <= g_max, :]
     mse = np.square(df['truth'] - df['pred']).mean()
+    return mse
+
+
+def get_mae_vs_theory(out_model, t_max=None, g_max=None):
+
+    df = out_model['true_prob']
+
+    if t_max:
+        df = df.loc[df['t'] <= t_max, :]
+    if g_max:
+        df = df.loc[df['g'] <= g_max, :]
+    mse = np.abs(df['truth'] - df['pred']).mean()
     return mse
 
 

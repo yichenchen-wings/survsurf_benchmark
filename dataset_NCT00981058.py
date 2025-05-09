@@ -26,7 +26,7 @@ class DatasetNCT00981058(Dataset):
             ds_name, 
             g_resol, 
             split: Literal['train', 'tune', 'val', 'test'], 
-            mode:Literal['first_cross_obs_only', 'first_last_obs_per_g', 'full_traj_obs_only', 'multi_t', 'true_probs_grid','true_probs_grid_naless'],
+            mode:Literal['first_cross_obs_only', 'first_cross_obs_only_more_g', 'first_last_obs_per_g', 'full_traj_obs_only', 'multi_t', 'true_probs_grid','true_probs_grid_naless'],
             separate_g_from_feats: bool,
             t_resol=1,
             g_max=5,
@@ -101,6 +101,60 @@ class DatasetNCT00981058(Dataset):
         
         df_trans_time = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
             self._single_traj_to_trans_time
+        ).reset_index(level=0)
+        df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
+        df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
+        df_xy = df_xy.reset_index(drop=True)
+        df_xy[COL_WEIGHT] = 1
+        df_xy[COL_IS_TRANS] = 1
+        return df_xy 
+    
+    def _single_traj_to_trans_time_more_g(self, df_single_traj):
+        traj = pd.Series(
+            df_single_traj[self.colname_g].values,
+            index=df_single_traj[self.colname_time].values
+        )
+        if 0 in traj.index:
+            assert traj[0] == 0
+        else:
+            traj[0] = 0
+        
+        traj = traj.sort_index()
+        traj_trans = traj.diff()
+        assert all(traj_trans.index.isin(traj.index))
+        max_trans_to = traj.max()
+        rows_event_df = []
+        for time, trans_mag in traj_trans.items():
+            if trans_mag > 0: # record when a state/grade is first reached
+                trans_to = traj[time]
+                rows_event_df.append(
+                    {
+                        COLNAME_SURVIVAL_EVENT_OBSERVED:1,
+                        COLNAME_SURVIVAL_DURATION:time,
+                        self.colname_g:trans_to
+                    }
+                )
+        # at the latest obs, the more severe states 'have not yet been observed'
+        for g in np.arange(max_trans_to+self.g_resol, self.g_max, self.g_resol):
+            rows_event_df.append(
+                {
+                    COLNAME_SURVIVAL_EVENT_OBSERVED:0,
+                    COLNAME_SURVIVAL_DURATION:time,
+                    self.colname_g: g 
+                }
+            )
+        return pd.DataFrame(rows_event_df)
+    
+    def _get_df_Xy_trans_obs_more_g(self):
+        xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
+        assert self.colname_traj_id in xs.columns
+        assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
+
+        max_g_by_t_obs = pd.read_csv(self.path_max_g_by_t_obs, index_col=0)
+        assert self.colname_traj_id in max_g_by_t_obs.columns
+        
+        df_trans_time = max_g_by_t_obs.groupby(self.colname_traj_id).apply(
+            self._single_traj_to_trans_time_more_g
         ).reset_index(level=0)
         df_xy = df_trans_time.merge(xs, on=self.colname_traj_id, how='left')
         df_xy = df_xy.loc[df_xy[self.colname_g] > 0,:]
@@ -370,6 +424,8 @@ class DatasetNCT00981058(Dataset):
     def _get_df_Xy(self):
         if self.mode == 'first_cross_obs_only':
             df_Xy = self._get_df_Xy_trans_obs()
+        elif self.mode == 'first_cross_obs_only_more_g':
+            df_Xy = self._get_df_Xy_trans_obs_more_g()
         elif self.mode == 'first_last_obs_per_g':
             df_Xy = self._get_df_Xy_first_last_obs_per_g()
         elif self.mode == 'full_traj_obs_only':
@@ -414,7 +470,7 @@ class DataModuleNCT00981058(LightningDataModule):
             separate_g_from_feats, 
             batch_size, 
             num_workers,
-            train_mode:Literal['first_cross_obs_only','full_traj_obs_only'],
+            train_mode:Literal['first_cross_obs_only', 'first_cross_obs_only_more_g', 'full_traj_obs_only'],
             eval_mode:Literal['first_cross_obs_only', 'true_probs_grid', 'multi_t','true_probs_grid_naless'], 
             t_resol=None,
             g_max=5

@@ -58,7 +58,7 @@ def get_SurvSurf(
 
 class SurvSurf2DTaddTGNormTG(SurvSurf2DTaddTG):
     def __init__(self, z0_size, hidden_dim, n_layers, t_max, dropout=None):
-        if dropout is None:
+        if dropout is None: # dropout not recommended as it can break monotonicity
             dropout = 0
         super().__init__(z0_size=z0_size, hidden_dim=hidden_dim, n_layers=n_layers, dropout=dropout)
         self.t_max = t_max
