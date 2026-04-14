@@ -3,5 +3,9 @@
 
 
 # Pleas list packages you need to install via pip
-monotonic_nn_surv_surf @ git+https://yc366@gitlab.developers.cam.ac.uk/yc366/monotonic_nn_survival_surface.git@4dcef7e5f1443eefc11b522fdf3d35b46b8f4d01
+#monotonic_nn_surv_surf @ git+https://yc366@gitlab.developers.cam.ac.uk/yc366/monotonic_nn_survival_surface.git@4dcef7e5f1443eefc11b522fdf3d35b46b8f4d01
+monotonic_nn_surv_surf @ git+https://yc366@gitlab.developers.cam.ac.uk/yc366/monotonic_nn_survival_surface.git@9041661269dc99cd1d2cc61721b4d10cd1e838b6
 wandb~=0.17.2
+pycox~=0.3.0
+sklearn_pandas
+xgboost~=2.1.4
