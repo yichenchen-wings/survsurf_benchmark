@@ -17,7 +17,7 @@ dependencies:
 
 # python packages
 - numpy < 2
-- pandas < 3.0
+- pandas=2.2.2
 - pyshp
 - seaborn
 - matplotlib
@@ -32,8 +32,8 @@ dependencies:
 # for number of threads and number of workers.
 
 # for general DNN training
-- conda-forge::lightning
+- conda-forge::lightning=2.4.0
 - conda-forge::ipywidgets
 - conda-forge::optuna
 
-- sebp::scikit-survival
+- sebp::scikit-survival=0.22.2
