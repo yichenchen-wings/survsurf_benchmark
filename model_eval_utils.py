@@ -246,6 +246,7 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
 
     # Calculating the brier scores at each time point
     brier_scores = np.empty(times.shape[0], dtype=float)
+    N = estimate.shape[0]
     for i, t in enumerate(times):
         est = estimate[:, i]
         is_case = (test_time_happened <= t) & test_event 
@@ -257,11 +258,11 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
         if ipcw:
             sum_cases = (np.square(est) * is_case.astype(int) / prob_cens_y).sum()
             sum_controls = (np.square(1.0 - est) * is_control.astype(int) / prob_cens_t[i]).sum()
-            brier_scores[i] = (sum_cases + sum_controls)/N_certain
+            brier_scores[i] = (sum_cases + sum_controls)/N
         else:
             sum_cases = np.square(est)[is_case].sum()
             sum_controls = np.square(1.0 - est)[is_control].sum()
-            brier_scores[i] = (sum_cases + sum_controls)/N_certain
+            brier_scores[i] = (sum_cases + sum_controls)/N
 
     return times, brier_scores
 
