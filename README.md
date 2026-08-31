@@ -1,5 +1,5 @@
 # SurvSurf_benchmark
-
+Experimental code for arxiv.org/abs/2504.04997 (preprint), the notebooks and data are located on the `with_notebooks_and_data` branch.
 ## Dependnecies
 Dependencies are listed in `env_spec_python/environment.yml` and `env_spec_python/pip_requirements.txt`. To encapsulate the dependencies, you should create a new `conda` or `mamba` environment and install the dependencies from `environment.yml` first. Then use the `pip` within that environment (you can check by running `which pip` to check if it is within the correct `conda`/`mamba` environment) to `pip install` the dependencies from `pip_requirements.txt`, which contains the SurvSurf model as an installable package. 
 
