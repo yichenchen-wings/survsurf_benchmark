@@ -77,12 +77,12 @@ and the batch is `(subject, X, t, y, weight, is_trans)`.
 
 The `mode`/`train_mode` setting controls trajectory conversion. Common modes are:
 
-- `first_cross_obs_only`: first crossings plus a censored higher grade.
-- `first_cross_obs_only_more_g`: first crossings plus multiple censored grades.
+- `first_cross_obs_only`: first crossings plus a censored (immediately) higher grade.
+- `first_cross_obs_only_more_g`: first crossings plus multiple censored higher grades.
 - `full_traj_obs_only`: labels at all observed trajectory times.
 - `first_last_obs_per_g`: first and last informative observation per grade.
-- `all_tg`: every supported time/grade pair (Markov adapter).
-- `true_probs_grid`: simulated ground-truth probabilities on a grid.
+- `all_tg`: every observed time/grade pair (Markov adapter).
+- `true_probs_grid`: known simulated ground-truth probabilities on a grid (specific to Markov datasets).
 - `true_probs_grid_naless`: evaluation grid with unavailable values removed.
 - `multi_t`: an evaluation grid constructed at multiple time points.
 

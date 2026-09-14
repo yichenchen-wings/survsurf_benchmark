@@ -10,10 +10,12 @@ import numpy as np
 class SurvSurNormTGPrelim(SurvivalSurface):
     """Preliminary SurvSurf variant that normalizes time inputs."""
     def __init__(self, net, t_max):
+        """Initialize SurvSurNormTGPrelim and store its configuration."""
         super().__init__(net)
         self.t_max = t_max
     
     def forward(self, ts, gs, xs=None):
+        """Run model inference for the supplied batch or tensor."""
         return super().forward(ts/self.t_max, gs, xs)
 
 def get_SurvSurf_prelim(
@@ -42,10 +44,12 @@ def get_SurvSurf_prelim(
 class SurvSurfNormTG(SurvivalSurface):
     """Direct-prediction SurvSurf with normalized time inputs."""
     def __init__(self, net, t_max):
+        """Initialize SurvSurfNormTG and store its configuration."""
         super().__init__(net)
         self.t_max = t_max
     
     def forward(self, ts, gs, xs=None):
+        """Run model inference for the supplied batch or tensor."""
         return super().forward(ts/self.t_max, gs, xs)
 
 def get_SurvSurf(
@@ -65,12 +69,14 @@ def get_SurvSurf(
 class SurvSurf2DTaddTGNormTG(SurvSurf2DTaddTG):
     """Two-dimensional monotone SurvSurf with normalized time."""
     def __init__(self, z0_size, hidden_dim, n_layers, t_max, dropout=None):
+        """Initialize SurvSurf2DTaddTGNormTG and store its configuration."""
         if dropout is None: # dropout not recommended as it can break monotonicity
             dropout = 0
         super().__init__(z0_size=z0_size, hidden_dim=hidden_dim, n_layers=n_layers, dropout=dropout)
         self.t_max = t_max
     
     def forward(self, ts, gs, xs=None):
+        """Run model inference for the supplied batch or tensor."""
         return super().forward(ts/self.t_max, gs, xs)
     
 def get_SurvSurf2DTaddTG(
@@ -93,12 +99,14 @@ def get_SurvSurf2DTaddTG(
 class SurvSurf2DSigmJoLinNormTG(SurvSurf2DSigmJoLin):
     """Sigmoid/joint-linear SurvSurf variant with normalized time."""
     def __init__(self, z0_size, hidden_dim, n_layers, t_max, dropout=None):
+        """Initialize SurvSurf2DSigmJoLinNormTG and store its configuration."""
         if dropout is None:
             dropout = 0
         super().__init__(z0_size=z0_size, hidden_dim=hidden_dim, n_layers=n_layers, dropout=dropout)
         self.t_max = t_max
     
     def forward(self, ts, gs, xs=None):
+        """Run model inference for the supplied batch or tensor."""
         return super().forward(ts/self.t_max, gs, xs)
     
 def get_SurvSurf2DSigmJoLin(
@@ -122,8 +130,10 @@ def get_SurvSurf2DSigmJoLin(
 class LossBCEAllTG: # only use with the all-tg transform for input data
     """Binary cross-entropy over all sampled time/grade rows."""
     def __init__(self, t_res=None, g_res=None):
+        """Initialize LossBCEAllTG and store its configuration."""
         pass
     def loss_bce(self, model, batch):
+        """Compute binary cross-entropy for the batch."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         ys = ys.type(outputs.dtype)
@@ -132,14 +142,17 @@ class LossBCEAllTG: # only use with the all-tg transform for input data
         return loss
     
     def __call__(self, model, batch):
+        """Compute the LossBCEAllTG objective for one model batch."""
         return self.loss_bce(model, batch)
 
 
 class LossBrierSimple:
     """Weighted Brier objective evaluated directly on batch rows."""
     def __init__(self, t_res=None):
+        """Initialize LossBrierSimple and store its configuration."""
         pass
     def loss_brier(self, model, batch):
+        """Compute the batch Brier-style objective."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         ys = ys.type(outputs.dtype)
@@ -148,14 +161,17 @@ class LossBrierSimple:
         return torch.mean(losses)
     
     def __call__(self, model, batch):
+        """Compute the LossBrierSimple objective for one model batch."""
         return self.loss_brier(model, batch)
 
 
 class LossSumo:
     """Time-derivative survival objective using finite differences."""
     def __init__(self, t_res, g_res=None):
+        """Initialize LossSumo and store its configuration."""
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
+        """Compute the objective based on the surface derivative over time."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         ts.requires_grad_()
         outputs = model(batch)
@@ -177,9 +193,11 @@ class LossSumo:
         return losses
     
     def loss_dy_t_res(self, model, batch):
+        """Approximate the time derivative at the configured resolution."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         
+        # Compare with the preceding grid point; clamp at zero at the time origin.
         t_before =  ts - self.t_res
         t_before =  torch.clamp(t_before, 0, torch.inf)
 
@@ -198,6 +216,7 @@ class LossSumo:
         return losses
     
     def __call__(self, model, batch):
+        """Compute the LossSumo objective for one model batch."""
         if self.t_res:
             return self.loss_dy_t_res(model, batch)
         else:
@@ -207,8 +226,10 @@ class LossSumo:
 class LossDyDtEmphPos:
     """Time-derivative objective emphasizing positive transitions."""
     def __init__(self, t_res, g_res=None):
+        """Initialize LossDyDtEmphPos and store its configuration."""
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
+        """Compute the objective based on the surface derivative over time."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         ts.requires_grad_()
         outputs = model(batch)
@@ -231,6 +252,7 @@ class LossDyDtEmphPos:
         return losses
     
     def loss_dy_t_res(self, model, batch):
+        """Approximate the time derivative at the configured resolution."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         
@@ -253,6 +275,7 @@ class LossDyDtEmphPos:
         return losses
     
     def __call__(self, model, batch):
+        """Compute the LossDyDtEmphPos objective for one model batch."""
         if self.t_res:
             return self.loss_dy_t_res(model, batch)
         else:
@@ -262,12 +285,16 @@ class LossDyDtEmphPos:
 class LossDyDgEmphPos:
     """Grade-derivative objective emphasizing positive transitions."""
     def __init__(self, t_res=None, g_res=1):
+        """Initialize LossDyDgEmphPos and store its configuration."""
         self.g_res=g_res
     
     def loss_dy_g_res(self, model, batch):
+        """Approximate the grade derivative at the configured resolution."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         gs.requires_grad_()
         outputs = model(batch)
+        # Cumulative incidence must decrease with increasing severity grade, so
+        # this forward difference is expected to be negative.
         greater_g = gs + self.g_res
         batch_greater_g = (subjects, Xs, greater_g, ts, ys, weight, is_trans)
         outputs_greater_g  = model(batch_greater_g)
@@ -283,15 +310,18 @@ class LossDyDgEmphPos:
         return losses
     
     def __call__(self, model, batch):
+        """Compute the LossDyDgEmphPos objective for one model batch."""
         return self.loss_dy_g_res(model, batch)
     
     
 class LossDyDg:
     """Grade-derivative objective evaluated at finite resolution."""
     def __init__(self, t_res=None, g_res=1):
+        """Initialize LossDyDg and store its configuration."""
         self.g_res=g_res
     
     def loss_dydg(self, model, batch):
+        """Compute the objective based on the surface derivative over grade."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         gs.requires_grad_()
         outputs = model(batch)
@@ -313,6 +343,7 @@ class LossDyDg:
         return losses
     
     def loss_dy_g_res(self, model, batch):
+        """Approximate the grade derivative at the configured resolution."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         greater_g = gs + self.g_res
@@ -329,6 +360,7 @@ class LossDyDg:
         return losses
     
     def __call__(self, model, batch):
+        """Compute the LossDyDg objective for one model batch."""
         if self.g_res:
             return self.loss_dy_g_res(model, batch)
         else:
@@ -338,9 +370,11 @@ class LossDyDg:
 class LossDyDgSumo:
     """Combined grade-derivative and time-survival objective."""
     def __init__(self, t_res=None, g_res=1):
+        """Initialize LossDyDgSumo and store its configuration."""
         self.g_res = g_res
         self.t_res = t_res
     def loss(self, model, batch):
+        """Compute the combined loss terms for one batch."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
 
@@ -368,6 +402,7 @@ class LossDyDgSumo:
         return -torch.mean(weight*losses)
     
     def __call__(self, model, batch):
+        """Compute the LossDyDgSumo objective for one model batch."""
         if self.g_res:
             return self.loss(model, batch)
         else:
@@ -377,9 +412,11 @@ class LossDyDgSumo:
 class LossDyDgSumoFirstLast:
     """Combined objective for first/last observation rows."""
     def __init__(self, t_res=None, g_res=1):
+        """Initialize LossDyDgSumoFirstLast and store its configuration."""
         self.g_res = g_res
         self.t_res = t_res
     def loss(self, model, batch):
+        """Compute the combined loss terms for one batch."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         outputs = model(batch)
         
@@ -406,6 +443,7 @@ class LossDyDgSumoFirstLast:
         return -torch.mean(weight*(losses_at_trans + losses_off_trans))
     
     def __call__(self, model, batch):
+        """Compute the LossDyDgSumoFirstLast objective for one model batch."""
         if self.g_res:
             return self.loss(model, batch)
         else:
@@ -416,6 +454,7 @@ from pl_wrapper import STR_VAL_LOSS, LitModel
 class LitModelSurvSurf(LitModel):
     """Lightning wrapper for SurvSurf and two-loader validation."""
     def __init__(self, model, loss_fn, lr, weight_decay, print_epoch=False):
+        """Initialize LitModelSurvSurf and store its configuration."""
         super().__init__(
             model=model, 
             loss_fn=loss_fn, 
@@ -427,10 +466,12 @@ class LitModelSurvSurf(LitModel):
         self.weight_decay = weight_decay
         self.eval_fn = LossBrierSimple()
     def forward(self,batch):
+        """Run model inference for the supplied batch or tensor."""
         subjects, Xs, gs, ts, ys, weight, is_trans = batch
         return self.model(ts, gs, Xs)
     
     def configure_optimizers(self):
+        """Create the Adam optimizer used by Lightning."""
         params=self.model.parameters()
         optimizer = torch.optim.Adam(
             params,
@@ -441,6 +482,7 @@ class LitModelSurvSurf(LitModel):
     
     def validation_step(self, batch, batch_idx, dataloader_idx): #batch_idx is a compulsory argument:
         
+        """Evaluate one validation batch and retain its outputs."""
         if dataloader_idx == 0:
             # Compute the loss
             loss = self.loss_fn(self, batch)
@@ -457,6 +499,7 @@ class LitModelSurvSurf(LitModel):
             self.validation_brier_on_probs.append(eval_res)
 
     def on_validation_epoch_end(self):        
+        """Aggregate and log results from all validation loaders."""
         N = sum(output['batch_size'] for output in self.validation_loss)
         val_loss = sum(output['loss']*output['batch_size'] for output in self.validation_loss) / N
         self.log(STR_VAL_LOSS, val_loss)

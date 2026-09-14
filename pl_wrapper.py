@@ -12,6 +12,7 @@ class LitModel(pl.LightningModule):
     the paired observed/probability-grid loaders returned by data modules.
     """
     def __init__(self, model, loss_fn, lr=0.001, print_epoch=False):
+        """Initialize LitModel and store its configuration."""
         super().__init__()
         self.save_hyperparameters()
         self.model = model
@@ -25,10 +26,12 @@ class LitModel(pl.LightningModule):
     def forward(self,batch):
         # xs, slice_loc, ys, weights = batch
         # return self.model(xs)[0]
+        """Run model inference for the supplied batch or tensor."""
         raise NotImplementedError
 
     def training_step(self, batch, batch_idx): #batch_idx is a compulsory argument
         # Compute the loss
+        """Compute and retain the loss for one training batch."""
         loss = self.loss_fn(self, batch)
 
         eval_res = dict()
@@ -38,6 +41,7 @@ class LitModel(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
+        """Create the Adam optimizer used by Lightning."""
         params=self.model.parameters()
         optimizer = torch.optim.Adam(
             params,
@@ -47,6 +51,7 @@ class LitModel(pl.LightningModule):
 
     def test_step(self, batch, batch_idx): #batch_idx is a compulsory argument
         # Compute the loss
+        """Compute and log loss for one test batch."""
         loss = self.loss_fn(self, batch)
         self.log("test_loss", loss, on_step=False, on_epoch=True)
         return {'loss':loss.detach()}
@@ -55,6 +60,7 @@ class LitModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx): #batch_idx is a compulsory argument:
 
         # Compute the loss
+        """Evaluate one validation batch and retain its outputs."""
         loss = self.loss_fn(self, batch)
 
         eval_res = dict()
@@ -63,6 +69,7 @@ class LitModel(pl.LightningModule):
         self.validation_step_outputs.append(eval_res)
 
     def on_train_epoch_end(self):
+        """Aggregate and log the sample-weighted training loss."""
         self.epochs_run += 1
         N = sum(output['batch_size'] for output in self.training_step_outputs)
         train_loss = sum(output['loss']*output['batch_size'] for output in self.training_step_outputs) / N
@@ -75,6 +82,7 @@ class LitModel(pl.LightningModule):
         self.training_step_outputs.clear()
 
     def on_validation_epoch_end(self):
+        """Aggregate and log results from all validation loaders."""
         N = sum(output['batch_size'] for output in self.validation_step_outputs)
         val_loss = sum(output['loss']*output['batch_size'] for output in self.validation_step_outputs) / N
         self.log(STR_VAL_LOSS, val_loss)

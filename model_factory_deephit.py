@@ -44,11 +44,13 @@ def get_DeepHit(
 class LossBrierDeepHitTrans:
     """Brier objective restricted or weighted toward transition rows."""
     def __init__(self, t_size, t_res, g_res=None):
+        """Initialize LossBrierDeepHitTrans and store its configuration."""
         self.t_size = t_size
         self.t_res = t_res
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_brier(self, model, batch):
+        """Compute the batch Brier-style objective."""
         subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
@@ -65,6 +67,7 @@ class LossBrierDeepHitTrans:
         torch._assert(t_size == self.t_size, f'found mismatching time(last) dim (output shape = {outputs.shape}).')
 
         
+        # Broadcast scalar event times over bins so each CIF cell can be labelled.
         ts = ts.repeat(1, self.t_size).reshape(outputs.shape)
         CIF = torch.cumsum(outputs, dim=-1)
         t_matrix = torch.linspace(0, self.t_size-1, steps=self.t_size)*self.t_res
@@ -91,18 +94,21 @@ class LossBrierDeepHitTrans:
         return loss
     
     def __call__(self, model, batch):
+        """Compute the LossBrierDeepHitTrans objective for one model batch."""
         return self.loss_brier(model, batch)
     
 
 class LossDyDgEmphPos:
     """Grade finite-difference objective emphasizing transitions."""
     def __init__(self, t_size, t_res, g_res):
+        """Initialize LossDyDgEmphPos and store its configuration."""
         self.t_size = t_size
         self.t_res = t_res
         self.g_resol = g_res
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_dydg(self, model, batch):
+        """Compute the objective based on the surface derivative over grade."""
         subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
@@ -113,6 +119,8 @@ class LossDyDgEmphPos:
 
         torch._assert(torch.all(ts <= self.tmax_allowed), f'found input time beyond allowed horizon {self.tmax_allowed}.')
 
+        # Grade is the last feature for DeepHit. Perturbing it by one grid step
+        # gives the finite difference used to compute dydg.
         Xs_greater_g = Xs.clone()
         Xs_greater_g[:, -1] = Xs_greater_g[:, -1] + self.g_resol
         batch_greater_g = (subjects, Xs_greater_g, ts, ys, weight, is_trans)
@@ -149,18 +157,21 @@ class LossDyDgEmphPos:
         return loss
     
     def __call__(self, model, batch):
+        """Compute the LossDyDgEmphPos objective for one model batch."""
         return self.loss_dydg(model, batch)
 
 
 class LossDyDg:
     """Grade finite-difference objective for cumulative incidence."""
     def __init__(self, t_size, t_res, g_res):
+        """Initialize LossDyDg and store its configuration."""
         self.t_size = t_size
         self.t_res = t_res
         self.g_resol = g_res
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_dydg(self, model, batch):
+        """Compute the objective based on the surface derivative over grade."""
         subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
@@ -206,17 +217,20 @@ class LossDyDg:
         return loss
     
     def __call__(self, model, batch):
+        """Compute the LossDyDg objective for one model batch."""
         return self.loss_dydg(model, batch)
 
 
 class LossBrierDeepHit:
     """Weighted Brier objective for discrete-time predictions."""
     def __init__(self, t_size, t_res, g_res=None):
+        """Initialize LossBrierDeepHit and store its configuration."""
         self.t_size = t_size
         self.t_res = t_res
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_brier(self, model, batch):
+        """Compute the batch Brier-style objective."""
         subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
@@ -251,16 +265,19 @@ class LossBrierDeepHit:
         return loss
     
     def __call__(self, model, batch):
+        """Compute the LossBrierDeepHit objective for one model batch."""
         return self.loss_brier(model, batch)
 
 class LossSumo:
     """Survival objective derived from probability mass over time."""
     def __init__(self, t_size, t_res, g_res=None):
+        """Initialize LossSumo and store its configuration."""
         self.t_size = t_size
         self.t_res = t_res
         self.tmax_allowed = self.t_size*self.t_res
 
     def loss_sumo(self, model, batch):
+        """Compute the batch survival monotonicity objective."""
         subjects, Xs, ts, ys, weight, is_trans = batch
 
         torch._assert(ts.dim() == 2, 'ts should have two dimensions (bs, 1)')
@@ -301,6 +318,7 @@ class LossSumo:
         return loss
     
     def __call__(self, model, batch):
+        """Compute the LossSumo objective for one model batch."""
         return self.loss_sumo(model, batch)
     
 
@@ -311,6 +329,7 @@ from pl_wrapper import STR_VAL_LOSS, LitModel
 class LitModelDeepHit(LitModel):
     """Lightning wrapper for DeepHit and two-loader validation."""
     def __init__(self, model, loss_fn, t_size, t_res, weight_decay, lr=0.001, print_epoch=False):
+        """Initialize LitModelDeepHit and store its configuration."""
         super().__init__(
             model=model, 
             loss_fn=loss_fn, 
@@ -322,10 +341,12 @@ class LitModelDeepHit(LitModel):
         self.weight_decay = weight_decay
         self.loss_brier = LossBrierDeepHit(t_size, t_res)
     def forward(self,batch):
+        """Run model inference for the supplied batch or tensor."""
         subjects, Xs, ts, ys, weight, is_trans = batch
         return self.model(Xs)
     
     def configure_optimizers(self):
+        """Create the Adam optimizer used by Lightning."""
         params=self.model.parameters()
         optimizer = torch.optim.Adam(
             params,
@@ -335,6 +356,7 @@ class LitModelDeepHit(LitModel):
         return optimizer
     
     def validation_step(self, batch, batch_idx, dataloader_idx): #batch_idx is a compulsory argument:
+        """Evaluate one validation batch and retain its outputs."""
         if dataloader_idx == 0:
             # Compute the loss
             loss = self.loss_fn(self, batch)
@@ -351,6 +373,7 @@ class LitModelDeepHit(LitModel):
             self.validation_brier_on_probs.append(eval_res)
 
     def on_validation_epoch_end(self):
+        """Aggregate and log results from all validation loaders."""
         N = sum(output['batch_size'] for output in self.validation_loss)
         val_loss = sum(output['loss']*output['batch_size'] for output in self.validation_loss) / N
         self.log(STR_VAL_LOSS, val_loss)

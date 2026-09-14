@@ -72,6 +72,7 @@ class FCNet(nn.Module):
             self.layers.append(drop)
     
     def forward(self, x):
+        """Run model inference for the supplied batch or tensor."""
         for layer in self.layers:
             x = layer(x)
         return x
@@ -95,6 +96,7 @@ class DeepHit(nn.Module):
             act_cls,
             dropout=0.
     ):
+        """Initialize DeepHit and store its configuration."""
         super().__init__()
         self.n_input_feats = n_input_feats
         self.k_compete_events = k_compete_events
@@ -140,11 +142,13 @@ class DeepHit(nn.Module):
         self.head = nn.ModuleList([head_linear, head_act])
 
     def _apply_block_shared_base(self, x):
+        """Apply the shared block and concatenate the original features."""
         out = self.block_shared_base(x)
         out = torch.cat([x, out], dim=-1) # -> (batch_size, expanded_feat_len) 
         return out
 
     def _apply_blocks_cause_spcfc(self, x):
+        """Apply event-specific blocks and flatten their outputs."""
         bs, n_feats = x.shape
         out = []
         for k, block in self.blocks_cause_spcfc_hidden.items():
@@ -156,6 +160,7 @@ class DeepHit(nn.Module):
         return out
     
     def _apply_head(self, x):
+        """Map hidden features to normalized event-time probability mass."""
         for layer in self.head:
             x = layer(x)
         return x
