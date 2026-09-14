@@ -1,4 +1,10 @@
 
+"""Datasets and Lightning data modules for simulated Markov trajectories.
+
+The adapter reads subject features, sampled grade histories, and (when requested)
+known probability surfaces from split-specific CSV files.
+"""
+
 from typing import Literal
 from lightning import LightningDataModule
 import numpy as np
@@ -20,6 +26,7 @@ COL_IS_TRANS = 'is_t_trans'
 
 
 def _get_censor_status_for_g(df_max_g_by_t_subj, g):
+    """Summarize whether and when a subject reached grade ``g``."""
     g_max =  df_max_g_by_t_subj['g_max_by_time'].max()
     seletor_has_obs_greater_g = df_max_g_by_t_subj['g_max_by_time'] >= g
     seletor_max_g = df_max_g_by_t_subj['g_max_by_time'] == g_max
@@ -39,6 +46,7 @@ def _get_censor_status_for_g(df_max_g_by_t_subj, g):
 
 
 def get_pre_censoring_t(df_dir, ds_name, gs, split: Literal['train', 'tune', 'val', 'test']):
+    """Build per-subject event/censoring rows for each requested grade."""
     path_max_g_by_t_obs = os.path.join(df_dir,f'{ds_name}__df_state_history_sampled_max_{split}.csv')
     df_max_g_by_t_obs = pd.read_csv(path_max_g_by_t_obs, index_col=0)
     df_out = []
@@ -50,6 +58,11 @@ def get_pre_censoring_t(df_dir, ds_name, gs, split: Literal['train', 'tune', 'va
 
 
 class DatasetMarkovSurvSurf(Dataset):
+    """Transform one simulated Markov split into model-ready survival rows.
+
+    ``mode`` selects observed crossings, trajectory labels, all time/grade pairs,
+    or the simulator's probability grid. Grades are normalized by ``g_max``.
+    """
     def __init__(
             self, 
             df_dir, 
@@ -61,6 +74,7 @@ class DatasetMarkovSurvSurf(Dataset):
             t_resol=1,
             g_max=5,
         ):
+        """Initialize DatasetMarkovSurvSurf and store its configuration."""
         assert t_resol == 1
         self.split = split
         self.mode = mode
@@ -77,15 +91,18 @@ class DatasetMarkovSurvSurf(Dataset):
         self.subjects, self.X, self.g, self.t, self.y, self.weight, self.is_trans = self._get_df_Xy()
 
     def __len__(self):
+        """Return the number of generated survival rows."""
         return self.y.shape[0]
 
     def __getitem__(self, index):
+        """Return one model-ready batch item by integer index."""
         if self.separate_g_from_feats:
             return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
         else:
             return self.subjects[index], self.X[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
         
     def _single_traj_labels_all_tg(self, df_single_traj):
+        """Generate binary labels for every supported grade at observed times."""
         df_sorted = df_single_traj.sort_values(self.colname_time)
         ts_raw = df_sorted[self.colname_time].values
         gs_raw = df_sorted[self.colname_g].values
@@ -125,6 +142,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return pd.DataFrame(rows)
     
     def _get_df_Xy_all_tg_by_subj(self):
+        """Join all-time/grade labels to subject features and balance row weights."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -149,6 +167,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return df_xy    
 
     def _single_traj_to_trans_time(self, df_single_traj, higher_grade_censored=True):
+        """Convert one ordered trajectory to observed and censored transition rows."""
         traj = pd.Series(
             df_single_traj[self.colname_g].values,
             index=df_single_traj[self.colname_time].values
@@ -185,6 +204,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return pd.DataFrame(rows_event_df)
     
     def _get_df_Xy_trans_obs(self):
+        """Join first-crossing transition rows to subject-level features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -203,6 +223,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return df_xy 
     
     def _single_traj_to_trans_time_more_g(self, df_single_traj):
+        """Convert a trajectory to crossings plus eligible higher-grade censoring rows."""
         traj = pd.Series(
             df_single_traj[self.colname_g].values,
             index=df_single_traj[self.colname_time].values
@@ -239,6 +260,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return pd.DataFrame(rows_event_df)
     
     def _get_df_Xy_trans_obs_more_g(self):
+        """Join expanded crossing/censoring rows to subject-level features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -257,6 +279,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return df_xy 
 
     def _last_obs_each_g_in_traj(self, df_single_traj):
+        """Select the last informative observation for every grade in one trajectory."""
         rows = []
         for g, df in df_single_traj.groupby(self.colname_g):
             if g > 0:
@@ -280,6 +303,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return pd.DataFrame(rows)
         
     def _get_df_Xy_first_last_obs_per_g(self):
+        """Build feature rows from first and last informative grade observations."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -310,6 +334,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return df_xy
 
     def _single_traj_full_to_label(self, df_single_traj):
+        """Label each observation by whether the target grade was reached."""
         rows_event_df = pd.DataFrame()
         rows_event_df[COLNAME_SURVIVAL_DURATION] = df_single_traj[self.colname_time].values
         rows_event_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = 1
@@ -317,6 +342,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return rows_event_df
     
     def _single_traj_g_label_trans(self, df_single_traj_g):
+        """Create labels for one target grade across a complete trajectory."""
         out = df_single_traj_g.copy()
         selector = df_single_traj_g[COLNAME_SURVIVAL_EVENT_OBSERVED].astype(bool)
         t_min = df_single_traj_g.loc[selector, COLNAME_SURVIVAL_DURATION].min()
@@ -326,6 +352,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return out
 
     def _get_df_Xy_full_traj_obs(self, g0_as_gres=True):
+        """Expand observed trajectories across grades and join subject features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -360,6 +387,7 @@ class DatasetMarkovSurvSurf(Dataset):
         return df_xy
 
     def _get_df_Xy_true_prob(self):
+        """Load or construct probability-grid rows and attach subject features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -383,6 +411,9 @@ class DatasetMarkovSurvSurf(Dataset):
     
 
     def _get_df_Xy(self):
+        """Dispatch the selected transformation and convert columns to tensors."""
+        # Keep row construction separate from tensor conversion: every mode below
+        # must produce the same canonical columns consumed by the final block.
         if self.mode == 'first_cross_obs_only':
             df_Xy = self._get_df_Xy_trans_obs()
         elif self.mode == 'first_cross_obs_only_more_g':
@@ -397,8 +428,11 @@ class DatasetMarkovSurvSurf(Dataset):
             df_Xy = self._get_df_Xy_true_prob()
         else:
             raise NotImplementedError
+        # SurvSurf expects grade coordinates in [0, 1], regardless of raw scale.
         df_Xy[self.colname_g] = df_Xy[self.colname_g]/self.g_max
         cols_subj_feats = sorted([i for i in df_Xy.columns if i.startswith('feat')])
+        # SurvSurf takes g explicitly; comparison models receive g as a separate
+        # feature. This distinction determines the tuple shape returned to models.
         if self.separate_g_from_feats:
             subjects = df_Xy[self.colname_traj_id]
             X = torch.tensor(df_Xy[cols_subj_feats].values, dtype=torch.float32)
@@ -421,6 +455,7 @@ class DatasetMarkovSurvSurf(Dataset):
             return subjects,X,g,t,y, weight, is_trans
 
 class DataModuleMarkovSurvSurf(LightningDataModule):
+    """Create train and paired observed/grid evaluation loaders."""
     def __init__(
             self, 
             df_dir,
@@ -435,6 +470,7 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             g_max=5
         ):
     
+        """Initialize DataModuleMarkovSurvSurf and store its configuration."""
         super().__init__()
         self.df_dir = df_dir
         self.ds_name = ds_name
@@ -447,6 +483,7 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
         self.eval_mode = eval_mode
         self.g_max = g_max
     def train_dataloader(self):
+        """Return the shuffled loader used to fit the model."""
         train_split = DatasetMarkovSurvSurf(
             self.df_dir, 
             self.ds_name, 
@@ -459,6 +496,7 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
         return DataLoader(train_split, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
     
     def val_dataloader(self):
+        """Return observed-label and probability-grid validation loaders."""
         as_obs = DatasetMarkovSurvSurf(
             self.df_dir, 
             self.ds_name, 
@@ -478,12 +516,15 @@ class DataModuleMarkovSurvSurf(LightningDataModule):
             g_max=self.g_max
         )
 
+        # Loader 0 drives validation loss; loader 1 captures the full surface for
+        # comparison with simulator truth in the Lightning validation hook.
         return [
             DataLoader(as_obs, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
             DataLoader(as_true_prob, batch_size=as_true_prob.__len__()//20, num_workers=self.num_workers, shuffle=False)
         ]
     
     def test_dataloader(self):
+        """Return observed-label and probability-grid test loaders."""
         as_obs = DatasetMarkovSurvSurf(
             self.df_dir, 
             self.ds_name, 

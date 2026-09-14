@@ -1,3 +1,9 @@
+"""Metrics for predicted grade-by-time cumulative incidence surfaces.
+
+The utilities align observed or interval-censored grade transitions with model
+predictions and compute IPCW scores, theory-based errors, and diagnostics.
+"""
+
 from typing import Literal
 import numpy as np
 import pandas as pd
@@ -6,6 +12,7 @@ COLNAME_SURVIVAL_DURATION = "duration"
 COLNAME_SURVIVAL_EVENT_OBSERVED ="event_observed"
 
 def _get_last_obs_time(df_max_g_by_t_subj, g):
+    """Summarize event status and final observation time for one grade."""
     seletor_max_g = df_max_g_by_t_subj['g_max_by_time'] >= g
     t_last_obs = df_max_g_by_t_subj['t'].max()
     obs = seletor_max_g.any()
@@ -19,12 +26,18 @@ from sksurv.nonparametric import CensoringDistributionEstimator
 
 
 def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj'], max_grade=5, max_time=None):
+    """Return grade-averaged integrated Brier score and time-dependent AUC.
+
+    ``out_model`` contains ``obs`` event rows and ``true_prob`` prediction rows.
+    The current implementation intentionally reports the AUC component as NaN.
+    """
     integrated_brier_events = []
     mean_auc_events = []
     out_model_obs = out_model['obs'].copy()
     gs_all = out_model_obs['g'].unique()
 
     def fill_in_higher_gs(df):
+        """Add censored rows above a subject's observed maximum grade."""
         subj = df['subj'].iloc[0]
         max_time = df['t'].max()
         max_g = df['g'].max()
@@ -135,6 +148,7 @@ def get_brier_and_auc(out_model, df_last_obs_time_train, ipcw:Literal['by_grade'
 
 
 def _all_grades_start_end_time_subj(obs_full_traj_subj, gs):
+    """Infer exact or interval-censored bounds for each requested grade."""
     rows = []
     obs_full_traj_subj = obs_full_traj_subj.sort_values('duration')
     obs_full_traj_subj['event_observed'] = obs_full_traj_subj['event_observed'].astype(bool)
@@ -190,6 +204,7 @@ def _all_grades_start_end_time_subj(obs_full_traj_subj, gs):
     return pd.DataFrame(rows)
     
 def get_all_grades_start_end_time(obs_full_traj, gs):
+    """Expand subject trajectories to one event/censoring interval per grade."""
     assert all([g > 0 for g in gs])
     out = obs_full_traj.groupby('subject').apply(
         lambda df: _all_grades_start_end_time_subj(df, gs)
@@ -200,6 +215,7 @@ def get_all_grades_start_end_time(obs_full_traj, gs):
 
 from sksurv.metrics import _check_estimate_2d
 def _check_survival_all_subj(survival_test_all_subj):
+    """Validate interval-censoring bounds and event indicators."""
     selector = survival_test_all_subj['missing_exact_t'].astype(bool)
     assert all(
         survival_test_all_subj.loc[selector, 't_uncensored_alive'] < 
@@ -208,6 +224,7 @@ def _check_survival_all_subj(survival_test_all_subj):
     assert all(survival_test_all_subj.loc[selector, 'event_observed'])
 
 def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_all_subj, times, ipcw=True):
+    """Compute intrvl_imputed Brier scores over ``times`` for one grade."""
     # observed grades: 
     # if event_time <= t_grid: expect surv prob = 0 at t_grid
     # if event_time > t_grid: expect surv prob = 1 at t_grid
@@ -229,6 +246,8 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
     if estimate.ndim == 1 and times.shape[0] == 1:
         estimate = estimate.reshape(-1, 1)
     if ipcw:
+        # scikit-survival models censoring as a survival distribution. Zero
+        # censoring survival implies an unusable point and therefore zero weight.
         # fit IPCW estimator
         subj_last_obs_time_train = subj_last_obs_time_train.sort_values(COLNAME_SURVIVAL_DURATION)
         subj_last_obs_time_train[COLNAME_SURVIVAL_EVENT_OBSERVED].iloc[0] = True # otherwise CensoringDistributionEstimator in integrated_brier_score won't run
@@ -246,8 +265,11 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
 
     # Calculating the brier scores at each time point
     brier_scores = np.empty(times.shape[0], dtype=float)
+    N = estimate.shape[0]
     for i, t in enumerate(times):
         est = estimate[:, i]
+        # Interval-censored subjects only contribute before their last known-alive
+        # time or after the upper event bound; ambiguous intervals are excluded.
         is_case = (test_time_happened <= t) & test_event 
         is_control_exact_t = (test_time_happened >= t) & ~test_event
         is_control_inexact_t = (test_time_alive >= t) & missing_exact_t
@@ -257,16 +279,17 @@ def brier_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_
         if ipcw:
             sum_cases = (np.square(est) * is_case.astype(int) / prob_cens_y).sum()
             sum_controls = (np.square(1.0 - est) * is_control.astype(int) / prob_cens_t[i]).sum()
-            brier_scores[i] = (sum_cases + sum_controls)/N_certain
+            brier_scores[i] = (sum_cases + sum_controls)/N
         else:
             sum_cases = np.square(est)[is_case].sum()
             sum_controls = np.square(1.0 - est)[is_control].sum()
-            brier_scores[i] = (sum_cases + sum_controls)/N_certain
+            brier_scores[i] = (sum_cases + sum_controls)/N
 
     return times, brier_scores
 
 
 def get_integrated_brier_intrvl_imputed(obs_trans_time_all_g, out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj','without_ipcw'], max_grade=5, max_time=None):
+    """Average time-integrated intrvl_imputed Brier scores across eligible grades."""
     int_brier_all_grades = []
     out_model['true_prob']['g'] = out_model['true_prob']['g'].astype('float64').round(6)
     obs_trans_time_all_g['g'] = obs_trans_time_all_g['g'].astype('float64').round(6)
@@ -337,6 +360,7 @@ def get_integrated_brier_intrvl_imputed(obs_trans_time_all_g, out_model, df_last
 
 
 def mse_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_all_subj, truth_all_subj, times, ipcw=True):
+    """Compute certainty-aware prediction MSE over time for one grade."""
 
     _check_survival_all_subj(survival_test_all_subj)
     times = times.astype(float)
@@ -387,6 +411,7 @@ def mse_score_at_g(subj_last_obs_time_train, survival_test_all_subj, estimate_al
     return times, mse_scores
 
 def get_mse_vs_theory_certain_obs(obs_trans_time_all_g, out_model, df_last_obs_time_train, ipcw:Literal['by_grade', 'by_subj','without_ipcw'], max_grade=5, max_time=None):
+    """Average prediction-versus-theory MSE over certain observation intervals."""
     int_mse_all_grades = []
     max_g_in_data = df_last_obs_time_train['g'].max()
     for g, obs_all_t_all_sbj in out_model['true_prob'].groupby('g'):
@@ -457,6 +482,7 @@ def get_mse_vs_theory_certain_obs(obs_trans_time_all_g, out_model, df_last_obs_t
 
 
 def get_mse_vs_theory(out_model, t_max=None, g_max=None):
+    """Return mean squared error between prediction and truth grid columns."""
 
     df = out_model['true_prob']
 
@@ -469,6 +495,7 @@ def get_mse_vs_theory(out_model, t_max=None, g_max=None):
 
 
 def get_mae_vs_theory(out_model, t_max=None, g_max=None):
+    """Return mean absolute error between prediction and truth grid columns."""
 
     df = out_model['true_prob']
 
@@ -481,6 +508,7 @@ def get_mae_vs_theory(out_model, t_max=None, g_max=None):
 
 
 def get_kl_div_vs_theory(out_model, t_max=None, g_max=None):
+    """Return average divergence between predicted and true time increments."""
     
     df_in_range = out_model['true_prob'].copy()
 
@@ -507,6 +535,7 @@ def get_kl_div_vs_theory(out_model, t_max=None, g_max=None):
 
 
 def get_ks_stats(out_model, t_max=None, g_max=None):
+    """Return the mean subject-level maximum prediction error."""
     
     df_in_range = out_model['true_prob'].copy()
 

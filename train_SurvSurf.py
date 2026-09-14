@@ -1,3 +1,8 @@
+"""Command-line entry point for a configured SurvSurf experiment.
+
+Example: ``python train_SurvSurf.py --seed 10 --config CONFIG.json``.
+"""
+
 # %%
 import argparse
 from pathlib import Path
@@ -146,6 +151,5 @@ seconds = time_taken_s - hr_in_s - min_in_s
 print('='*10 + 'END' + '='*10)
 script_str = 'training'
 print(f'Time taken to run {script_str} script: {str(hr).zfill(2)}:{str(minutes).zfill(2)}:{str(seconds).zfill(2)}')
-
 
 

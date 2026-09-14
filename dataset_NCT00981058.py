@@ -1,4 +1,6 @@
 
+"""Dataset and data module for NCT00981058 clinical-trial trajectories."""
+
 from typing import Literal
 from lightning import LightningDataModule
 import numpy as np
@@ -20,6 +22,7 @@ COL_IS_TRANS = 'is_t_trans'
 
 
 class DatasetNCT00981058(Dataset):
+    """Convert one trial split into normalized, grade-specific survival rows."""
     def __init__(
             self, 
             df_dir, 
@@ -31,6 +34,7 @@ class DatasetNCT00981058(Dataset):
             t_resol=1,
             g_max=5,
         ):
+        """Initialize DatasetNCT00981058 and store its configuration."""
         self.split = split
         self.mode = mode
         self.path_df_feature_per_sub = os.path.join(df_dir,f'{ds_name}__df_features_{split}.csv')
@@ -47,15 +51,18 @@ class DatasetNCT00981058(Dataset):
         self.subjects, self.X, self.g, self.t, self.y, self.weight, self.is_trans= self._get_df_Xy()
 
     def __len__(self):
+        """Return the number of generated survival rows."""
         return self.y.shape[0]
 
     def __getitem__(self, index):
+        """Return one model-ready batch item by integer index."""
         if self.separate_g_from_feats:
             return self.subjects[index], self.X[index], self.g[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
         else:
             return self.subjects[index], self.X[index], self.t[index], self.y[index], self.weight[index], self.is_trans[index]
 
     def _single_traj_to_trans_time(self, df_single_traj, higher_grade_censored=True):
+        """Convert one ordered trajectory to observed and censored transition rows."""
         traj = pd.Series(
             df_single_traj[self.colname_g].values,
             index=df_single_traj[self.colname_time].values
@@ -92,6 +99,7 @@ class DatasetNCT00981058(Dataset):
         return pd.DataFrame(rows_event_df)
     
     def _get_df_Xy_trans_obs(self):
+        """Join first-crossing transition rows to subject-level features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -110,6 +118,7 @@ class DatasetNCT00981058(Dataset):
         return df_xy 
     
     def _single_traj_to_trans_time_more_g(self, df_single_traj):
+        """Convert a trajectory to crossings plus eligible higher-grade censoring rows."""
         traj = pd.Series(
             df_single_traj[self.colname_g].values,
             index=df_single_traj[self.colname_time].values
@@ -146,6 +155,7 @@ class DatasetNCT00981058(Dataset):
         return pd.DataFrame(rows_event_df)
     
     def _get_df_Xy_trans_obs_more_g(self):
+        """Join expanded crossing/censoring rows to subject-level features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -164,6 +174,7 @@ class DatasetNCT00981058(Dataset):
         return df_xy 
 
     def _last_obs_each_g_in_traj(self, df_single_traj):
+        """Select the last informative observation for every grade in one trajectory."""
         rows = []
         for g, df in df_single_traj.groupby(self.colname_g):
             if g > 0:
@@ -187,6 +198,7 @@ class DatasetNCT00981058(Dataset):
         return pd.DataFrame(rows)
         
     def _get_df_Xy_first_last_obs_per_g(self):
+        """Build feature rows from first and last informative grade observations."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -217,6 +229,7 @@ class DatasetNCT00981058(Dataset):
         return df_xy
     
     def _single_traj_full_to_label(self, df_single_traj):
+        """Label each observation by whether the target grade was reached."""
         rows_event_df = pd.DataFrame()
         rows_event_df[COLNAME_SURVIVAL_DURATION] = df_single_traj[self.colname_time].values
         rows_event_df[COLNAME_SURVIVAL_EVENT_OBSERVED] = 1
@@ -224,6 +237,7 @@ class DatasetNCT00981058(Dataset):
         return rows_event_df
     
     def _single_traj_g_label_trans(self, df_single_traj_g):
+        """Create labels for one target grade across a complete trajectory."""
         out = df_single_traj_g.copy()
         selector = df_single_traj_g[COLNAME_SURVIVAL_EVENT_OBSERVED].astype(bool)
         t_min = df_single_traj_g.loc[selector, COLNAME_SURVIVAL_DURATION].min()
@@ -233,6 +247,7 @@ class DatasetNCT00981058(Dataset):
         return out
     
     def _get_df_Xy_full_traj_obs(self, g0_as_gres=True):
+        """Expand observed trajectories across grades and join subject features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -268,6 +283,7 @@ class DatasetNCT00981058(Dataset):
         return df_xy
     
     def _single_event_to_5_times(self, single_event, t_max):
+        """Expand one event row to evaluation times around the event."""
         out_df = pd.DataFrame()
         assert single_event.shape[0] == 1
         single_event = single_event.iloc[0, :]
@@ -308,6 +324,7 @@ class DatasetNCT00981058(Dataset):
         return out_df
         
     def _get_df_Xy_multi_t(self):
+        """Create a multi-time evaluation table and join subject features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -329,6 +346,7 @@ class DatasetNCT00981058(Dataset):
         return df_xy 
      
     def _single_subj_to_tg_grid(self, obs_full_traj_subj, t_min, t_max):
+        """Create an evaluation time/grade grid for one subject."""
         ts = [i for i in range(int(t_min), int(t_max)+1, self.t_resol)]
         gs = [i+1 for i in range(self.g_max)]
         ts = np.array(sorted(set(ts)))
@@ -397,6 +415,7 @@ class DatasetNCT00981058(Dataset):
         return pd.concat(rows)
     
     def _get_df_Xy_true_prob(self, dropna=False):
+        """Load or construct probability-grid rows and attach subject features."""
         xs = pd.read_csv(self.path_df_feature_per_sub, index_col=0)
         assert self.colname_traj_id in xs.columns
         assert xs[self.colname_traj_id].nunique() == xs[self.colname_traj_id].size
@@ -422,6 +441,8 @@ class DatasetNCT00981058(Dataset):
         return df_xy
 
     def _get_df_Xy(self):
+        """Dispatch the selected transformation and convert columns to tensors."""
+        # All transformation modes converge on a canonical survival-row table.
         if self.mode == 'first_cross_obs_only':
             df_Xy = self._get_df_Xy_trans_obs()
         elif self.mode == 'first_cross_obs_only_more_g':
@@ -438,8 +459,11 @@ class DatasetNCT00981058(Dataset):
             df_Xy = self._get_df_Xy_multi_t()
         else:
             raise NotImplementedError
+        # Normalize the clinical grade before it reaches either model family.
         df_Xy[self.colname_g] = df_Xy[self.colname_g]/self.g_max
         cols_subj_feats = sorted([i for i in df_Xy.columns if i.startswith('feat')])
+        # SurvSurf takes g explicitly; comparison models receive g as a separate
+        # feature. This distinction determines the tuple shape returned to models.
         if self.separate_g_from_feats:
             subjects = df_Xy[self.colname_traj_id]
             X = torch.tensor(df_Xy[cols_subj_feats].values, dtype=torch.float32)
@@ -462,6 +486,7 @@ class DatasetNCT00981058(Dataset):
             return subjects,X,g,t,y, weight, is_trans
 
 class DataModuleNCT00981058(LightningDataModule):
+    """Construct training and paired observed/grid evaluation data loaders."""
     def __init__(
             self, 
             df_dir,
@@ -476,6 +501,7 @@ class DataModuleNCT00981058(LightningDataModule):
             g_max=5
         ):
     
+        """Initialize DataModuleNCT00981058 and store its configuration."""
         super().__init__()
         self.df_dir = df_dir
         self.ds_name = ds_name
@@ -489,6 +515,7 @@ class DataModuleNCT00981058(LightningDataModule):
         self.t_resol = t_resol
         self.g_max = g_max
     def train_dataloader(self):
+        """Return the shuffled loader used to fit the model."""
         train_split = DatasetNCT00981058(
             self.df_dir, 
             self.ds_name, 
@@ -502,6 +529,7 @@ class DataModuleNCT00981058(LightningDataModule):
         return DataLoader(train_split, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
     
     def val_dataloader(self):
+        """Return observed-label and probability-grid validation loaders."""
         as_obs = DatasetNCT00981058(
             self.df_dir, 
             self.ds_name, 
@@ -523,12 +551,15 @@ class DataModuleNCT00981058(LightningDataModule):
             g_max=self.g_max
         )
 
+        # The wrappers distinguish loss rows from surface-evaluation rows using
+        # Lightning's dataloader_idx argument.
         return [
             DataLoader(as_obs, batch_size=as_obs.__len__()//20, num_workers=self.num_workers, shuffle=False), 
             DataLoader(as_true_prob, batch_size=as_true_prob.__len__()//20, num_workers=self.num_workers, shuffle=False)
         ]
     
     def test_dataloader(self):
+        """Return observed-label and probability-grid test loaders."""
         as_obs = DatasetNCT00981058(
             self.df_dir, 
             self.ds_name, 
@@ -557,6 +588,7 @@ class DataModuleNCT00981058(LightningDataModule):
     
     
     def test_mode_train_dataloader(self):
+        """Return train-split loaders configured for evaluation."""
         as_obs = DatasetNCT00981058(
             self.df_dir, 
             self.ds_name, 

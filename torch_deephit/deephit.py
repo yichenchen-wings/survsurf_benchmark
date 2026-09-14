@@ -1,3 +1,5 @@
+"""PyTorch implementation of the discrete-time DeepHit architecture."""
+
 from typing import Optional
 from torch import nn
 import torch
@@ -5,6 +7,11 @@ from collections import OrderedDict
 
 
 class FCNet(nn.Module):
+    """Configurable fully connected block used by DeepHit.
+
+    Hidden layers apply ``h_fn_cls`` and dropout; the last layer applies
+    ``o_fn_cls`` without dropout.
+    """
     def __init__(
             self,
             input_dim: int, 
@@ -15,16 +22,7 @@ class FCNet(nn.Module):
             o_fn_cls: Optional[nn.Module] = None, 
             dropout=0, 
         ):
-        """
-            GOAL             : Create FC network with different specifications 
-            input_dim (int)  : number of input features
-            num_layers       : number of layers in FCNet
-            h_dim  (int)     : number of hidden units
-            o_dim            : output size
-            h_fn             : activation function for hidden layers (default: tf.nn.relu)
-            o_fn             : activation function for output layers (defalut: None)
-            keep_prob        : keep probabilty [0, 1]  (if None, dropout is not employed)
-        """
+        """Initialize the block dimensions, activations, and dropout probability."""
         super().__init__()
         self.input_dim = input_dim
         self.num_layers = num_layers
@@ -74,11 +72,18 @@ class FCNet(nn.Module):
             self.layers.append(drop)
     
     def forward(self, x):
+        """Run model inference for the supplied batch or tensor."""
         for layer in self.layers:
             x = layer(x)
         return x
                         
 class DeepHit(nn.Module):
+    """Discrete-time competing-risk network from the DeepHit architecture.
+
+    ``forward`` returns probability mass with shape
+    ``(batch, k_compete_events, t_size)``; ``forward_cif`` cumulatively sums the
+    time axis to return cumulative incidence functions.
+    """
     def __init__(
             self,
             n_input_feats,
@@ -91,6 +96,7 @@ class DeepHit(nn.Module):
             act_cls,
             dropout=0.
     ):
+        """Initialize DeepHit and store its configuration."""
         super().__init__()
         self.n_input_feats = n_input_feats
         self.k_compete_events = k_compete_events
@@ -136,11 +142,13 @@ class DeepHit(nn.Module):
         self.head = nn.ModuleList([head_linear, head_act])
 
     def _apply_block_shared_base(self, x):
+        """Apply the shared block and concatenate the original features."""
         out = self.block_shared_base(x)
         out = torch.cat([x, out], dim=-1) # -> (batch_size, expanded_feat_len) 
         return out
-    
+
     def _apply_blocks_cause_spcfc(self, x):
+        """Apply event-specific blocks and flatten their outputs."""
         bs, n_feats = x.shape
         out = []
         for k, block in self.blocks_cause_spcfc_hidden.items():
@@ -152,12 +160,14 @@ class DeepHit(nn.Module):
         return out
     
     def _apply_head(self, x):
+        """Map hidden features to normalized event-time probability mass."""
         for layer in self.head:
             x = layer(x)
         return x
 
     
     def forward(self, x):
+        """Return event-time probability mass for each input row."""
         bs, n_feats = x.shape
         out = self._apply_block_shared_base(x)
         out = self._apply_blocks_cause_spcfc(out)
@@ -166,11 +176,7 @@ class DeepHit(nn.Module):
         return out
     
     def forward_cif(self, x):
+        """Return cumulative incidence by cumulatively summing probability mass."""
         f = self.forward(x)
         out = torch.cumsum(f, dim=-1)
         return out
-
-
-
-
-        
