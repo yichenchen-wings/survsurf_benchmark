@@ -1,4 +1,6 @@
 
+"""Dataset and data module for the UK property-price trajectory benchmark."""
+
 from typing import Literal
 from lightning import LightningDataModule
 import numpy as np
@@ -20,6 +22,7 @@ COL_IS_TRANS = 'is_t_trans'
 
 
 class DatasetHousePrice(Dataset):
+    """Convert one property-price split into grade-specific survival rows."""
     def __init__(
             self, 
             df_dir, 
@@ -468,6 +471,7 @@ class DatasetHousePrice(Dataset):
             return subjects,X,g,t,y, weight, is_trans
 
 class DataModuleHousePrice(LightningDataModule):
+    """Construct train and paired evaluation loaders for property-price data."""
     def __init__(
             self, 
             df_dir,

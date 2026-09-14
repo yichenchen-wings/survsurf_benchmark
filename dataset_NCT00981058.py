@@ -1,4 +1,6 @@
 
+"""Dataset and data module for NCT00981058 clinical-trial trajectories."""
+
 from typing import Literal
 from lightning import LightningDataModule
 import numpy as np
@@ -20,6 +22,7 @@ COL_IS_TRANS = 'is_t_trans'
 
 
 class DatasetNCT00981058(Dataset):
+    """Convert one trial split into normalized, grade-specific survival rows."""
     def __init__(
             self, 
             df_dir, 
@@ -462,6 +465,7 @@ class DatasetNCT00981058(Dataset):
             return subjects,X,g,t,y, weight, is_trans
 
 class DataModuleNCT00981058(LightningDataModule):
+    """Construct training and paired observed/grid evaluation data loaders."""
     def __init__(
             self, 
             df_dir,

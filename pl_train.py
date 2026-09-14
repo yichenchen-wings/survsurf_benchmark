@@ -1,3 +1,5 @@
+"""Shared PyTorch Lightning training orchestration with W&B logging."""
+
 import lightning.pytorch as pl
 import torch
 import gc
@@ -20,6 +22,22 @@ def pl_wdb_train(
         log_every_n_batches=1,
         inference_mode=False,
     ):
+    """Fit a Lightning model with W&B logging, checkpointing, and early stopping.
+
+    Args:
+        dir_runtime_results: Root directory for logs and checkpoints.
+        patience: Validation epochs without improvement before stopping.
+        max_epoch: Maximum number of training epochs.
+        accumulate_grad_batches: Number of batches per optimizer update.
+        device: Lightning accelerator name, such as ``"cpu"`` or ``"gpu"``.
+        proj_name: W&B project name.
+        save_top_k: Number of lowest-validation-loss checkpoints to retain.
+        datamodule: Data module supplying the training and validation loaders.
+        model_lit: Lightning module to optimize.
+        module_to_log: Optional module whose parameters/gradients W&B watches.
+        log_every_n_batches: Watch logging frequency.
+        inference_mode: Whether Lightning uses inference mode for evaluation.
+    """
     with torch.no_grad():
         torch.cuda.empty_cache()
     gc.collect()

@@ -1,3 +1,5 @@
+"""DeepHit construction, benchmark objectives, and Lightning integration."""
+
 import torch
 from torch import nn
 from torch_deephit.deephit import DeepHit
@@ -14,6 +16,7 @@ def get_DeepHit(
         dropout=None
 
 ):
+    """Build a single-event discrete-time DeepHit network."""
     n_input_feats = n_input_feats_g_excl+1
     if h_dim_shared is None:
         h_dim_shared = n_input_feats*3
@@ -39,6 +42,7 @@ def get_DeepHit(
     return model
 
 class LossBrierDeepHitTrans:
+    """Brier objective restricted or weighted toward transition rows."""
     def __init__(self, t_size, t_res, g_res=None):
         self.t_size = t_size
         self.t_res = t_res
@@ -91,6 +95,7 @@ class LossBrierDeepHitTrans:
     
 
 class LossDyDgEmphPos:
+    """Grade finite-difference objective emphasizing transitions."""
     def __init__(self, t_size, t_res, g_res):
         self.t_size = t_size
         self.t_res = t_res
@@ -148,6 +153,7 @@ class LossDyDgEmphPos:
 
 
 class LossDyDg:
+    """Grade finite-difference objective for cumulative incidence."""
     def __init__(self, t_size, t_res, g_res):
         self.t_size = t_size
         self.t_res = t_res
@@ -204,6 +210,7 @@ class LossDyDg:
 
 
 class LossBrierDeepHit:
+    """Weighted Brier objective for discrete-time predictions."""
     def __init__(self, t_size, t_res, g_res=None):
         self.t_size = t_size
         self.t_res = t_res
@@ -247,6 +254,7 @@ class LossBrierDeepHit:
         return self.loss_brier(model, batch)
 
 class LossSumo:
+    """Survival objective derived from probability mass over time."""
     def __init__(self, t_size, t_res, g_res=None):
         self.t_size = t_size
         self.t_res = t_res
@@ -301,6 +309,7 @@ class LossSumo:
 from pl_wrapper import STR_VAL_LOSS, LitModel
 
 class LitModelDeepHit(LitModel):
+    """Lightning wrapper for DeepHit and two-loader validation."""
     def __init__(self, model, loss_fn, t_size, t_res, weight_decay, lr=0.001, print_epoch=False):
         super().__init__(
             model=model, 

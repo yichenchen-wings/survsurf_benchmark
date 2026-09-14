@@ -1,9 +1,16 @@
+"""Base Lightning module shared by the benchmark model wrappers."""
+
 import torch
 import lightning.pytorch as pl
 
 STR_VAL_LOSS = 'val_loss'
 
 class LitModel(pl.LightningModule):
+    """Provide common optimization, loss logging, and epoch aggregation.
+
+    Subclasses implement ``forward`` and may override validation when they consume
+    the paired observed/probability-grid loaders returned by data modules.
+    """
     def __init__(self, model, loss_fn, lr=0.001, print_epoch=False):
         super().__init__()
         self.save_hyperparameters()

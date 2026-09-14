@@ -1,3 +1,5 @@
+"""SurvSurf architectures, numerical objectives, and Lightning integration."""
+
 import torch
 from monotonic_nn_surv_surf.core.survival_surface_nn import SurvivalSurface
 from monotonic_nn_surv_surf.core.monotonic_net import MonotonicNet
@@ -6,6 +8,7 @@ from monotonic_nn_surv_surf.utils.surv_surf_latent import SurvSurfLatent, Latent
 import numpy as np
 
 class SurvSurNormTGPrelim(SurvivalSurface):
+    """Preliminary SurvSurf variant that normalizes time inputs."""
     def __init__(self, net, t_max):
         super().__init__(net)
         self.t_max = t_max
@@ -20,6 +23,7 @@ def get_SurvSurf_prelim(
         t_max,
         dropout=0
 ):
+    """Build the preliminary normalized SurvSurf network."""
     model = SurvSurfLatent(
         mono_net_sizes=[n_hidden_dim] + [n_hidden_dim]*n_hidden_layers + [1],
         latent_feat_transformer=LatentFeatFC(
@@ -36,6 +40,7 @@ def get_SurvSurf_prelim(
 
 
 class SurvSurfNormTG(SurvivalSurface):
+    """Direct-prediction SurvSurf with normalized time inputs."""
     def __init__(self, net, t_max):
         super().__init__(net)
         self.t_max = t_max
@@ -50,6 +55,7 @@ def get_SurvSurf(
         t_max,
         dropout=None
 ):
+    """Build the standard normalized SurvSurf network."""
 
     monotonic_net = MonotonicNet(latent_sizes=[n_input_feats_g_excl] + [n_hidden_dim]*n_hidden_layers + [1])
     model = SurvSurfNormTG(monotonic_net, t_max)
@@ -57,6 +63,7 @@ def get_SurvSurf(
 
 
 class SurvSurf2DTaddTGNormTG(SurvSurf2DTaddTG):
+    """Two-dimensional monotone SurvSurf with normalized time."""
     def __init__(self, z0_size, hidden_dim, n_layers, t_max, dropout=None):
         if dropout is None: # dropout not recommended as it can break monotonicity
             dropout = 0
@@ -73,6 +80,7 @@ def get_SurvSurf2DTaddTG(
         t_max,
         dropout=None
 ):
+    """Build the benchmark's primary two-dimensional SurvSurf variant."""
     model = SurvSurf2DTaddTGNormTG(
         z0_size=n_input_feats_g_excl, 
         hidden_dim=n_hidden_dim, 
@@ -83,6 +91,7 @@ def get_SurvSurf2DTaddTG(
     return model
 
 class SurvSurf2DSigmJoLinNormTG(SurvSurf2DSigmJoLin):
+    """Sigmoid/joint-linear SurvSurf variant with normalized time."""
     def __init__(self, z0_size, hidden_dim, n_layers, t_max, dropout=None):
         if dropout is None:
             dropout = 0
@@ -99,6 +108,7 @@ def get_SurvSurf2DSigmJoLin(
         t_max,
         dropout=None
 ):
+    """Build the sigmoid/joint-linear SurvSurf variant."""
     model = SurvSurf2DSigmJoLinNormTG(
         z0_size=n_input_feats_g_excl, 
         hidden_dim=n_hidden_dim, 
@@ -110,6 +120,7 @@ def get_SurvSurf2DSigmJoLin(
 
 
 class LossBCEAllTG: # only use with the all-tg transform for input data
+    """Binary cross-entropy over all sampled time/grade rows."""
     def __init__(self, t_res=None, g_res=None):
         pass
     def loss_bce(self, model, batch):
@@ -125,6 +136,7 @@ class LossBCEAllTG: # only use with the all-tg transform for input data
 
 
 class LossBrierSimple:
+    """Weighted Brier objective evaluated directly on batch rows."""
     def __init__(self, t_res=None):
         pass
     def loss_brier(self, model, batch):
@@ -140,6 +152,7 @@ class LossBrierSimple:
 
 
 class LossSumo:
+    """Time-derivative survival objective using finite differences."""
     def __init__(self, t_res, g_res=None):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
@@ -192,6 +205,7 @@ class LossSumo:
 
 
 class LossDyDtEmphPos:
+    """Time-derivative objective emphasizing positive transitions."""
     def __init__(self, t_res, g_res=None):
         self.t_res = t_res
     def loss_dydt(self, model, batch): 
@@ -246,6 +260,7 @@ class LossDyDtEmphPos:
 
 
 class LossDyDgEmphPos:
+    """Grade-derivative objective emphasizing positive transitions."""
     def __init__(self, t_res=None, g_res=1):
         self.g_res=g_res
     
@@ -272,6 +287,7 @@ class LossDyDgEmphPos:
     
     
 class LossDyDg:
+    """Grade-derivative objective evaluated at finite resolution."""
     def __init__(self, t_res=None, g_res=1):
         self.g_res=g_res
     
@@ -320,6 +336,7 @@ class LossDyDg:
 
 
 class LossDyDgSumo:
+    """Combined grade-derivative and time-survival objective."""
     def __init__(self, t_res=None, g_res=1):
         self.g_res = g_res
         self.t_res = t_res
@@ -358,6 +375,7 @@ class LossDyDgSumo:
         
 
 class LossDyDgSumoFirstLast:
+    """Combined objective for first/last observation rows."""
     def __init__(self, t_res=None, g_res=1):
         self.g_res = g_res
         self.t_res = t_res
@@ -396,6 +414,7 @@ class LossDyDgSumoFirstLast:
 from pl_wrapper import STR_VAL_LOSS, LitModel
 
 class LitModelSurvSurf(LitModel):
+    """Lightning wrapper for SurvSurf and two-loader validation."""
     def __init__(self, model, loss_fn, lr, weight_decay, print_epoch=False):
         super().__init__(
             model=model, 

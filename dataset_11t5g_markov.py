@@ -1,4 +1,10 @@
 
+"""Datasets and Lightning data modules for simulated Markov trajectories.
+
+The adapter reads subject features, sampled grade histories, and (when requested)
+known probability surfaces from split-specific CSV files.
+"""
+
 from typing import Literal
 from lightning import LightningDataModule
 import numpy as np
@@ -39,6 +45,7 @@ def _get_censor_status_for_g(df_max_g_by_t_subj, g):
 
 
 def get_pre_censoring_t(df_dir, ds_name, gs, split: Literal['train', 'tune', 'val', 'test']):
+    """Build per-subject event/censoring rows for each requested grade."""
     path_max_g_by_t_obs = os.path.join(df_dir,f'{ds_name}__df_state_history_sampled_max_{split}.csv')
     df_max_g_by_t_obs = pd.read_csv(path_max_g_by_t_obs, index_col=0)
     df_out = []
@@ -50,6 +57,11 @@ def get_pre_censoring_t(df_dir, ds_name, gs, split: Literal['train', 'tune', 'va
 
 
 class DatasetMarkovSurvSurf(Dataset):
+    """Transform one simulated Markov split into model-ready survival rows.
+
+    ``mode`` selects observed crossings, trajectory labels, all time/grade pairs,
+    or the simulator's probability grid. Grades are normalized by ``g_max``.
+    """
     def __init__(
             self, 
             df_dir, 
@@ -421,6 +433,7 @@ class DatasetMarkovSurvSurf(Dataset):
             return subjects,X,g,t,y, weight, is_trans
 
 class DataModuleMarkovSurvSurf(LightningDataModule):
+    """Create train and paired observed/grid evaluation loaders."""
     def __init__(
             self, 
             df_dir,
