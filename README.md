@@ -132,7 +132,7 @@ Python modules. Misspelled names therefore fail during startup.
 | `save_top_k` | Best validation-loss checkpoints to retain. |
 | `watch_model` | Whether W&B records gradients and parameters. |
 
-## Reproducing the benchmark
+## Reproducing the benchmark (please move to the `with_notebooks_and_data` branch)
 
 1. Run the data-wrangling notebooks. NCT00981058 must be obtained separately from
    Data Sphere because access is controlled.
