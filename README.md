@@ -16,7 +16,6 @@ primarily performed in notebooks.
 | --- | --- |
 | `train_SurvSurf.py` | Train SurvSurf from a JSON configuration. |
 | `train_DeepHit.py` | Train DeepHit from a JSON configuration. |
-| `train_CoxTDNN.py` | Legacy fixed-configuration Cox time-dependent NN run. |
 | `model_factory_*.py` | Model constructors, objectives, and Lightning wrappers. |
 | `dataset_*.py` | Dataset-specific CSV-to-tensor transformations and data modules. |
 | `datasets.py` | Data-module registry used by the training entry points. |
@@ -160,7 +159,7 @@ CNN for image input) that transforms `xs` before calling the parent model's
 
 ## Notes and limitations
 
-- Several notebooks and the CoxTDNN entry point contain experiment-specific paths
+- Several notebooks contain experiment-specific paths
   or settings and may need local edits.
 - Evaluation expects ordered grades and specific pandas column names; assertions
   intentionally fail early when those assumptions are violated.
